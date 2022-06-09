@@ -25,6 +25,9 @@
       :disable="previewSlider.qSliderProps.disable.value"
       :model-value="previewSlider.qSliderProps.modelValue.value"
       @update:model-value="previewSlider.qSliderProps['onUpdate:modelValue']"
+      @click.stop="
+        undefined; // クリックでアクセント句が選択されないように
+      "
       @change="previewSlider.qSliderProps.onChange"
       @wheel="previewSlider.qSliderProps.onWheel"
       @pan="previewSlider.qSliderProps.onPan"
@@ -76,7 +79,7 @@ export default defineComponent({
       step: () => props.step,
       scrollStep: () => props.step * 10,
       scrollMinStep: () => props.step,
-      disableScroll: () => props.shiftKeyFlag,
+      disableScroll: () => props.shiftKeyFlag, // shift+ホイール操作の横方向スクロール中にスライダー操作を無視するため
     });
 
     const valueLabel = reactive({
@@ -129,8 +132,6 @@ export default defineComponent({
 </script>
 
 <style scoped lang="scss">
-@use '@/styles' as global;
-
 $value-label-height: 24px;
 
 div {
@@ -140,8 +141,8 @@ div {
   .q-slider {
     height: calc(100% - #{$value-label-height + 12px});
     margin-top: $value-label-height + 12px;
-    min-width: 30px;
-    max-width: 30px;
+    min-width: 20px;
+    max-width: 20px;
     :deep(.q-slider__track-container--v) {
       margin-left: -1.5px;
       width: 3px;

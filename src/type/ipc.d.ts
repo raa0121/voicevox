@@ -1,3 +1,5 @@
+import { EngineInfo, SplitTextWhenPasteType } from "@/type/preload";
+
 /**
  * invoke, handle
  */
@@ -10,11 +12,6 @@ type IpcIHData = {
   GET_TEMP_DIR: {
     args: [];
     return: string;
-  };
-
-  GET_CHARACTER_INFOS: {
-    args: [];
-    return: import("@/type/preload").CharacterInfo[];
   };
 
   GET_HOW_TO_USE_TEXT: {
@@ -42,6 +39,21 @@ type IpcIHData = {
     return: string;
   };
 
+  GET_CONTACT_TEXT: {
+    args: [];
+    return: string;
+  };
+
+  GET_Q_AND_A_TEXT: {
+    args: [];
+    return: string;
+  };
+
+  GET_PRIVACY_POLICY_TEXT: {
+    args: [];
+    return: string;
+  };
+
   SHOW_AUDIO_SAVE_DIALOG: {
     args: [obj: { title: string; defaultPath?: string }];
     return?: string;
@@ -58,7 +70,7 @@ type IpcIHData = {
   };
 
   SHOW_PROJECT_SAVE_DIALOG: {
-    args: [obj: { title: string }];
+    args: [obj: { title: string; defaultPath?: string }];
     return?: string;
   };
 
@@ -67,19 +79,28 @@ type IpcIHData = {
     return?: string[];
   };
 
-  SHOW_INFO_DIALOG: {
-    args: [obj: { title: string; message: string; buttons: string[] }];
+  SHOW_MESSAGE_DIALOG: {
+    args: [
+      obj: {
+        type: "none" | "info" | "error" | "question" | "warning";
+        title: string;
+        message: string;
+      }
+    ];
+    return: Electron.MessageBoxReturnValue;
+  };
+
+  SHOW_QUESTION_DIALOG: {
+    args: [
+      obj: {
+        type: "none" | "info" | "error" | "question" | "warning";
+        title: string;
+        message: string;
+        buttons: string[];
+        cancelId?: number;
+      }
+    ];
     return: number;
-  };
-
-  SHOW_WARNING_DIALOG: {
-    args: [obj: { title: string; message: string }];
-    return: Electron.MessageBoxReturnValue;
-  };
-
-  SHOW_ERROR_DIALOG: {
-    args: [obj: { title: string; message: string }];
-    return: Electron.MessageBoxReturnValue;
   };
 
   OPEN_TEXT_EDIT_CONTEXT_MENU: {
@@ -95,6 +116,11 @@ type IpcIHData = {
   INHERIT_AUDIOINFO: {
     args: [obj: { newValue?: boolean }];
     return: boolean;
+  };
+
+  ACTIVE_POINT_SCROLL_MODE: {
+    args: [obj: { newValue?: import("@/type/preload").ActivePointScrollMode }];
+    return: import("@/type/preload").ActivePointScrollMode;
   };
 
   IS_AVAILABLE_GPU_MODE: {
@@ -127,8 +153,13 @@ type IpcIHData = {
     return: void;
   };
 
-  RESTART_ENGINE: {
+  ENGINE_INFOS: {
     args: [];
+    return: EngineInfo[];
+  };
+
+  RESTART_ENGINE: {
+    args: [obj: { engineKey: string }];
     return: void;
   };
 
@@ -147,13 +178,40 @@ type IpcIHData = {
     return: void;
   };
 
+  SAVING_PRESETS: {
+    args: [
+      obj: {
+        newPresets?: {
+          presetItems: Record<string, import("@/type/preload").Preset>;
+          presetKeys: string[];
+        };
+      }
+    ];
+    return: import("@/type/preload").PresetConfig;
+  };
+
   HOTKEY_SETTINGS: {
     args: [obj: { newData?: import("@/type/preload").HotkeySetting }];
     return: import("@/type/preload").HotkeySetting[];
   };
 
-  IS_UNSET_DEFAULT_STYLE_IDS: {
+  TOOLBAR_SETTING: {
+    args: [obj: { newData?: import("@/type/preload").ToolbarSetting }];
+    return: import("@/type/preload").ToolbarSetting;
+  };
+
+  GET_USER_CHARACTER_ORDER: {
     args: [];
+    return: string[];
+  };
+
+  SET_USER_CHARACTER_ORDER: {
+    args: [string[]];
+    return: void;
+  };
+
+  IS_UNSET_DEFAULT_STYLE_ID: {
+    args: [speakerUuid: string];
     return: boolean;
   };
 
@@ -172,6 +230,50 @@ type IpcIHData = {
     return: import("@/type/preload").HotkeySetting[];
   };
 
+  GET_DEFAULT_TOOLBAR_SETTING: {
+    args: [];
+    return: import("@/type/preload").ToolbarSetting;
+  };
+
+  GET_ACCEPT_RETRIEVE_TELEMETRY: {
+    args: [];
+    return: import("@/type/preload").AcceptRetrieveTelemetryStatus;
+  };
+
+  SET_ACCEPT_RETRIEVE_TELEMETRY: {
+    args: [
+      acceptRetrieveTelemetry: import("@/type/preload").AcceptRetrieveTelemetryStatus
+    ];
+    return: void;
+  };
+  GET_ACCEPT_TERMS: {
+    args: [];
+    return: import("@/type/preload").AcceptTermsStatus;
+  };
+
+  SET_ACCEPT_TERMS: {
+    args: [acceptTerms: import("@/type/preload").AcceptTermsStatus];
+    return: void;
+  };
+  GET_EXPERIMENTAL_SETTING: {
+    args: [];
+    return: ExperimentalSetting;
+  };
+  SET_EXPERIMENTAL_SETTING: {
+    args: [experimentalSetting: ExperimentalSetting];
+    return: void;
+  };
+
+  GET_SPLITTER_POSITION: {
+    args: [];
+    return: import("@/type/preload").SplitterPosition;
+  };
+
+  SET_SPLITTER_POSITION: {
+    args: [splitterPosition: import("@/type/preload").SplitterPosition];
+    return: void;
+  };
+
   THEME: {
     args: [obj: { newData?: string }];
     return: import("@/type/preload").ThemeSetting | void;
@@ -179,6 +281,15 @@ type IpcIHData = {
 
   ON_VUEX_READY: {
     args: [];
+    return: void;
+  };
+
+  GET_SPLIT_TEXT_WHEN_PASTE: {
+    args: [];
+    return: SplitTextWhenPasteType;
+  };
+  SET_SPLIT_TEXT_WHEN_PASTE: {
+    args: [splitTextWhenPaste: SplitTextWhenPasteType];
     return: void;
   };
 };
@@ -217,8 +328,23 @@ type IpcSOData = {
     return: void;
   };
 
+  DETECT_ENTER_FULLSCREEN: {
+    args: [];
+    return: void;
+  };
+
+  DETECT_LEAVE_FULLSCREEN: {
+    args: [];
+    return: void;
+  };
+
   CHECK_EDITED_AND_NOT_SAVE: {
     args: [];
+    return: void;
+  };
+
+  DETECT_RESIZED: {
+    args: [obj: { width: number; height: number }];
     return: void;
   };
 };

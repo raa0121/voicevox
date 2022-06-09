@@ -21,6 +21,9 @@
           @update:model-value="
             previewAccentSlider.qSliderProps['onUpdate:modelValue']
           "
+          @click.stop="
+            undefined; // クリックでアクセント句が選択されないように
+          "
           @change="previewAccentSlider.qSliderProps.onChange"
           @wheel="previewAccentSlider.qSliderProps.onWheel"
           @pan="previewAccentSlider.qSliderProps.onPan"
@@ -34,12 +37,8 @@
       'grid-column': `1 / span ${accentPhrase.moras.length * 2 - 1}`,
     }"
   >
-    <svg :viewBox="`0 0 ${accentPhrase.moras.length * 40 - 10} 50`">
-      <polyline
-        :points="accentLine"
-        stroke="var(--color-display)"
-        fill="none"
-      />
+    <svg :viewBox="`0 0 ${accentPhrase.moras.length * 40 - 20} 50`">
+      <polyline :points="accentLine" />
     </svg>
   </div>
   <template v-for="(mora, moraIndex) in accentPhrase.moras" :key="moraIndex">
@@ -54,8 +53,8 @@
       ]"
       :style="{ 'grid-column': `${moraIndex * 2 + 1} / span 1` }"
     >
-      <svg width="29" height="50" viewBox="0 0 29 50">
-        <line x1="14" y1="0" x2="14" y2="50" stroke-width="1" />
+      <svg width="19" height="50" viewBox="0 0 19 50">
+        <line x1="9" y1="0" x2="9" y2="50" stroke-width="1" />
       </svg>
     </div>
   </template>
@@ -100,7 +99,7 @@ export default defineComponent({
       const accent = previewAccentSlider.state.currentValue.value ?? 0;
       return [...Array(props.accentPhrase.moras.length).keys()].map(
         (index) =>
-          `${index * 40 + 15} ${
+          `${index * 40 + 10} ${
             index + 1 == accent || (index != 0 && index < accent) ? 5 : 45
           }`
       );
@@ -116,7 +115,7 @@ export default defineComponent({
 </script>
 
 <style scoped lang="scss">
-@use '@/styles' as global;
+@use '@/styles/colors' as colors;
 
 div {
   padding: 0px;
@@ -133,15 +132,20 @@ div {
       right: 0;
       bottom: 0;
       > div {
-        padding-left: 10px;
-        padding-right: 5px;
+        padding-left: 5px;
       }
     }
   }
   &.accent-draw-cell {
     grid-row-start: 2;
-    svg line {
-      stroke: var(--color-display);
+    svg {
+      line {
+        stroke: colors.$display;
+      }
+      polyline {
+        stroke: colors.$display;
+        fill: none;
+      }
     }
   }
   &.accent-select-cell {
@@ -149,7 +153,7 @@ div {
     text-align: center;
     cursor: pointer;
     svg line {
-      stroke: var(--color-primary-light);
+      stroke: colors.$primary-light;
       stroke-dasharray: 3;
     }
   }

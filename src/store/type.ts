@@ -6,25 +6,36 @@ import {
   StoreOptions,
 } from "./vuex";
 import { Patch } from "immer";
-import { AccentPhrase, AudioQuery } from "@/openapi";
+import { AccentPhrase, AudioQuery, UserDictWord } from "@/openapi";
 import { createCommandMutationTree, PayloadRecipeTree } from "./command";
 import {
   CharacterInfo,
   DefaultStyleId,
   Encoding as EncodingType,
+  AcceptRetrieveTelemetryStatus,
+  AcceptTermsStatus,
   HotkeySetting,
   MoraDataType,
   SavingSetting,
   ThemeConf,
   ThemeSetting,
+  ExperimentalSetting,
+  ToolbarSetting,
   UpdateInfo,
+  Preset,
+  ActivePointScrollMode,
+  EngineInfo,
+  SplitTextWhenPasteType,
+  SplitterPosition,
 } from "@/type/preload";
 import { IEngineConnectorFactory } from "@/infrastructures/EngineConnector";
+import { QVueGlobals } from "quasar";
 
 export type AudioItem = {
   text: string;
   styleId?: number;
   query?: AudioQuery;
+  presetKey?: string;
 };
 
 export type AudioState = {
@@ -44,7 +55,15 @@ export type SaveResult =
   | "WRITE_ERROR"
   | "ENGINE_ERROR"
   | "CANCELED";
-export type SaveResultObject = { result: SaveResult; path: string | undefined };
+export type SaveResultObject = {
+  result: SaveResult;
+  path: string | undefined;
+  errorMessage?: string;
+};
+export type WriteErrorTypeForSaveAllResultDialog = {
+  path: string;
+  message: string;
+};
 
 type StoreType<T, U extends "getter" | "mutation" | "action"> = {
   [P in keyof T as Extract<keyof T[P], U> extends never
@@ -55,6 +74,8 @@ type StoreType<T, U extends "getter" | "mutation" | "action"> = {
     ? R
     : never;
 };
+
+export type QuasarDialog = QVueGlobals["dialog"];
 
 /*
  * Audio Store Types
@@ -67,6 +88,7 @@ export type AudioStoreState = {
   audioKeys: string[];
   audioStates: Record<string, AudioState>;
   _activeAudioKey?: string;
+  audioPlayStartPoint?: number;
   nowPlayingContinuously: boolean;
 };
 
@@ -87,12 +109,16 @@ type AudioStoreTypes = {
     getter: boolean;
   };
 
+  ACTIVE_AUDIO_ELEM_CURRENT_TIME: {
+    getter: number | undefined;
+  };
+
   START_WAITING_ENGINE: {
     action(): void;
   };
 
   RESTART_ENGINE: {
-    action(): void;
+    action(payload: { engineKey: string }): Promise<boolean>;
   };
 
   DETECTED_ENGINE_ERROR: {
@@ -111,13 +137,26 @@ type AudioStoreTypes = {
     mutation: { characterInfos: CharacterInfo[] };
   };
 
+  USER_ORDERED_CHARACTER_INFOS: {
+    getter: CharacterInfo[] | undefined;
+  };
+
   GENERATE_AUDIO_KEY: {
     action(): string;
+  };
+
+  SETUP_ENGINE_SPEAKER: {
+    action(payload: { styleId: number }): void;
   };
 
   SET_ACTIVE_AUDIO_KEY: {
     mutation: { audioKey?: string };
     action(payload: { audioKey?: string }): void;
+  };
+
+  SET_AUDIO_PLAY_START_POINT: {
+    mutation: { startPoint?: number };
+    action(payload: { startPoint?: number }): void;
   };
 
   SET_AUDIO_NOW_PLAYING: {
@@ -136,6 +175,7 @@ type AudioStoreTypes = {
     action(payload: {
       text?: string;
       styleId?: number;
+      presetKey?: string;
       baseAudioItem?: AudioItem;
     }): Promise<AudioItem>;
   };
@@ -166,12 +206,20 @@ type AudioStoreTypes = {
     mutation: { audioKey: string };
   };
 
+  SET_AUDIO_KEYS: {
+    mutation: { audioKeys: string[] };
+  };
+
   REMOVE_ALL_AUDIO_ITEM: {
     action(): void;
   };
 
   GET_AUDIO_CACHE: {
     action(payload: { audioKey: string }): Promise<Blob | null>;
+  };
+
+  GET_AUDIO_CACHE_FROM_AUDIO_ITEM: {
+    action(payload: { audioItem: AudioItem }): Promise<Blob | null>;
   };
 
   SET_AUDIO_TEXT: {
@@ -245,6 +293,10 @@ type AudioStoreTypes = {
     };
   };
 
+  APPLY_AUDIO_PRESET: {
+    mutation: { audioKey: string };
+  };
+
   FETCH_MORA_DATA: {
     action(payload: {
       accentPhrases: AccentPhrase[];
@@ -260,8 +312,24 @@ type AudioStoreTypes = {
     }): Promise<AccentPhrase[]>;
   };
 
+  GENERATE_LAB: {
+    action(payload: { audioKey: string; offset?: number }): string | undefined;
+  };
+
+  GET_AUDIO_PLAY_OFFSETS: {
+    action(payload: { audioKey: string }): number[];
+  };
+
   GENERATE_AUDIO: {
-    action(payload: { audioKey: string }): Blob | null;
+    action(payload: { audioKey: string }): Promise<Blob | null>;
+  };
+
+  GENERATE_AUDIO_FROM_AUDIO_ITEM: {
+    action(payload: { audioItem: AudioItem }): Blob | null;
+  };
+
+  CONNECT_AUDIO: {
+    action(payload: { encodedBlobs: string[] }): Blob | null;
   };
 
   GENERATE_AND_SAVE_AUDIO: {
@@ -279,12 +347,41 @@ type AudioStoreTypes = {
     }): SaveResultObject[] | undefined;
   };
 
+  GENERATE_AND_CONNECT_AND_SAVE_AUDIO: {
+    action(payload: {
+      filePath?: string;
+      encoding?: EncodingType;
+    }): SaveResultObject | undefined;
+  };
+
+  CONNECT_AND_EXPORT_TEXT: {
+    action(payload: {
+      filePath?: string;
+      encoding?: EncodingType;
+    }): SaveResultObject | undefined;
+  };
+
   PLAY_AUDIO: {
     action(payload: { audioKey: string }): boolean;
   };
 
+  PLAY_AUDIO_BLOB: {
+    action(payload: {
+      audioBlob: Blob;
+      audioElem: HTMLAudioElement;
+      audioKey?: string;
+    }): boolean;
+  };
+
   STOP_AUDIO: {
     action(payload: { audioKey: string }): void;
+  };
+
+  SET_AUDIO_PRESET_KEY: {
+    mutation: {
+      audioKey: string;
+      presetKey: string | undefined;
+    };
   };
 
   PLAY_CONTINUOUSLY_AUDIO: {
@@ -334,6 +431,11 @@ type AudioCommandStoreTypes = {
     action(payload: { audioKey: string }): void;
   };
 
+  COMMAND_SET_AUDIO_KEYS: {
+    mutation: { audioKeys: string[] };
+    action(payload: { audioKeys: string[] }): void;
+  };
+
   COMMAND_CHANGE_AUDIO_TEXT: {
     mutation: { audioKey: string; text: string } & (
       | { update: "Text" }
@@ -381,7 +483,32 @@ type AudioCommandStoreTypes = {
     }): void;
   };
 
+  COMMAND_RESET_MORA_PITCH_AND_LENGTH: {
+    action(payload: { audioKey: string }): void;
+  };
+
+  COMMAND_RESET_SELECTED_MORA_PITCH_AND_LENGTH: {
+    action(payload: { audioKey: string; accentPhraseIndex: number }): void;
+  };
+
   COMMAND_SET_AUDIO_MORA_DATA: {
+    mutation: {
+      audioKey: string;
+      accentPhraseIndex: number;
+      moraIndex: number;
+      data: number;
+      type: MoraDataType;
+    };
+    action(payload: {
+      audioKey: string;
+      accentPhraseIndex: number;
+      moraIndex: number;
+      data: number;
+      type: MoraDataType;
+    }): void;
+  };
+
+  COMMAND_SET_AUDIO_MORA_DATA_ACCENT_PHRASE: {
     mutation: {
       audioKey: string;
       accentPhraseIndex: number;
@@ -426,6 +553,24 @@ type AudioCommandStoreTypes = {
   COMMAND_SET_AUDIO_POST_PHONEME_LENGTH: {
     mutation: { audioKey: string; postPhonemeLength: number };
     action(payload: { audioKey: string; postPhonemeLength: number }): void;
+  };
+
+  COMMAND_SET_AUDIO_PRESET: {
+    mutation: {
+      audioKey: string;
+      presetKey: string | undefined;
+    };
+    action(payload: { audioKey: string; presetKey: string | undefined }): void;
+  };
+
+  COMMAND_APPLY_AUDIO_PRESET: {
+    mutation: { audioKey: string };
+    action(payload: { audioKey: string }): void;
+  };
+
+  COMMAND_FULLY_APPLY_AUDIO_PRESET: {
+    mutation: { presetKey: string };
+    action(payload: { presetKey: string }): void;
   };
 
   COMMAND_IMPORT_FROM_FILE: {
@@ -502,10 +647,19 @@ export type CommandActions = StoreType<CommandStoreTypes, "action">;
 
 export type IndexStoreState = {
   defaultStyleIds: DefaultStyleId[];
+  userCharacterOrder: string[];
 };
 
 type IndexStoreTypes = {
   GET_HOW_TO_USE_TEXT: {
+    action(): Promise<string>;
+  };
+
+  GET_CONTACT_TEXT: {
+    action(): Promise<string>;
+  };
+
+  GET_Q_AND_A_TEXT: {
     action(): Promise<string>;
   };
 
@@ -525,8 +679,12 @@ type IndexStoreTypes = {
     action(): Promise<string>;
   };
 
-  IS_UNSET_DEFAULT_STYLE_IDS: {
-    action(): Promise<boolean>;
+  GET_PRIVACY_POLICY_TEXT: {
+    action(): Promise<string>;
+  };
+
+  IS_UNSET_DEFAULT_STYLE_ID: {
+    action(payload: { speakerUuid: string }): Promise<boolean>;
   };
 
   LOAD_DEFAULT_STYLE_IDS: {
@@ -538,11 +696,17 @@ type IndexStoreTypes = {
     action(payload: DefaultStyleId[]): void;
   };
 
-  SHOW_WARNING_DIALOG: {
-    action(payload: {
-      title: string;
-      message: string;
-    }): Promise<Electron.MessageBoxReturnValue>;
+  LOAD_USER_CHARACTER_ORDER: {
+    action(): Promise<void>;
+  };
+
+  SET_USER_CHARACTER_ORDER: {
+    mutation: { userCharacterOrder: string[] };
+    action(payload: string[]): void;
+  };
+
+  GET_NEW_CHARACTERS: {
+    action(): string[];
   };
 
   LOG_ERROR: {
@@ -612,8 +776,13 @@ export type ProjectActions = StoreType<ProjectStoreTypes, "action">;
 export type SettingStoreState = {
   savingSetting: SavingSetting;
   hotkeySettings: HotkeySetting[];
-  engineHost: string;
+  toolbarSetting: ToolbarSetting;
+  engineInfos: EngineInfo[];
   themeSetting: ThemeSetting;
+  acceptRetrieveTelemetry: AcceptRetrieveTelemetryStatus;
+  experimentalSetting: ExperimentalSetting;
+  splitTextWhenPaste: SplitTextWhenPasteType;
+  splitterPosition: SplitterPosition;
 };
 
 type SettingStoreTypes = {
@@ -636,6 +805,15 @@ type SettingStoreTypes = {
     action(payload: { data: HotkeySetting }): void;
   };
 
+  GET_TOOLBAR_SETTING: {
+    action(): void;
+  };
+
+  SET_TOOLBAR_SETTING: {
+    mutation: { toolbarSetting: ToolbarSetting };
+    action(payload: { data: ToolbarSetting }): void;
+  };
+
   GET_THEME_SETTING: {
     action(): void;
   };
@@ -643,6 +821,56 @@ type SettingStoreTypes = {
   SET_THEME_SETTING: {
     mutation: { currentTheme: string; themes?: ThemeConf[] };
     action(payload: { currentTheme: string }): void;
+  };
+
+  GET_ACCEPT_RETRIEVE_TELEMETRY: {
+    action(): void;
+  };
+
+  GET_ACCEPT_TERMS: {
+    action(): void;
+  };
+
+  SET_ACCEPT_RETRIEVE_TELEMETRY: {
+    mutation: { acceptRetrieveTelemetry: AcceptRetrieveTelemetryStatus };
+    action(payload: {
+      acceptRetrieveTelemetry: AcceptRetrieveTelemetryStatus;
+    }): void;
+  };
+
+  SET_ACCEPT_TERMS: {
+    mutation: { acceptTerms: AcceptTermsStatus };
+    action(payload: { acceptTerms: AcceptTermsStatus }): void;
+  };
+
+  GET_EXPERIMENTAL_SETTING: {
+    action(): void;
+  };
+
+  SET_EXPERIMENTAL_SETTING: {
+    mutation: { experimentalSetting: ExperimentalSetting };
+    action(payload: { experimentalSetting: ExperimentalSetting }): void;
+  };
+
+  INIT_SPLIT_TEXT_WHEN_PASTE: {
+    action(): void;
+  };
+  SET_SPLIT_TEXT_WHEN_PASTE: {
+    mutation: { splitTextWhenPaste: SplitTextWhenPasteType };
+    action(payload: { splitTextWhenPaste: SplitTextWhenPasteType }): void;
+  };
+
+  GET_SPLITTER_POSITION: {
+    action(): void;
+  };
+
+  SET_SPLITTER_POSITION: {
+    mutation: { splitterPosition: SplitterPosition };
+    action(payload: { splitterPosition: SplitterPosition }): void;
+  };
+
+  CHANGE_USE_GPU: {
+    action(payload: { useGpu: boolean }): void;
   };
 };
 
@@ -656,18 +884,30 @@ export type SettingActions = StoreType<SettingStoreTypes, "action">;
 
 export type UiStoreState = {
   uiLockCount: number;
+  dialogLockCount: number;
   useGpu: boolean;
   inheritAudioInfo: boolean;
+  activePointScrollMode: ActivePointScrollMode;
   isHelpDialogOpen: boolean;
   isSettingDialogOpen: boolean;
+  isCharacterOrderDialogOpen: boolean;
   isDefaultStyleSelectDialogOpen: boolean;
   isHotkeySettingDialogOpen: boolean;
+  isToolbarSettingDialogOpen: boolean;
+  isAcceptRetrieveTelemetryDialogOpen: boolean;
+  isAcceptTermsDialogOpen: boolean;
+  isDictionaryManageDialogOpen: boolean;
   isMaximized: boolean;
   isPinned: boolean;
+  isFullscreen: boolean;
 };
 
 type UiStoreTypes = {
   UI_LOCKED: {
+    getter: boolean;
+  };
+
+  MENUBAR_LOCKED: {
     getter: boolean;
   };
 
@@ -681,6 +921,16 @@ type UiStoreTypes = {
   };
 
   UNLOCK_UI: {
+    mutation: undefined;
+    action(): void;
+  };
+
+  LOCK_MENUBAR: {
+    mutation: undefined;
+    action(): void;
+  };
+
+  UNLOCK_MENUBAR: {
     mutation: undefined;
     action(): void;
   };
@@ -704,8 +954,33 @@ type UiStoreTypes = {
     action(payload: { isHotkeySettingDialogOpen: boolean }): void;
   };
 
+  IS_TOOLBAR_SETTING_DIALOG_OPEN: {
+    mutation: { isToolbarSettingDialogOpen: boolean };
+    action(payload: { isToolbarSettingDialogOpen: boolean }): void;
+  };
+
+  IS_ACCEPT_RETRIEVE_TELEMETRY_DIALOG_OPEN: {
+    mutation: { isAcceptRetrieveTelemetryDialogOpen: boolean };
+    action(payload: { isAcceptRetrieveTelemetryDialogOpen: boolean }): void;
+  };
+
+  IS_ACCEPT_TERMS_DIALOG_OPEN: {
+    mutation: { isAcceptTermsDialogOpen: boolean };
+    action(payload: { isAcceptTermsDialogOpen: boolean }): void;
+  };
+
+  IS_DICTIONARY_MANAGE_DIALOG_OPEN: {
+    mutation: { isDictionaryManageDialogOpen: boolean };
+    action(payload: { isDictionaryManageDialogOpen: boolean }): void;
+  };
+
   ON_VUEX_READY: {
     action(): void;
+  };
+
+  IS_CHARACTER_ORDER_DIALOG_OPEN: {
+    mutation: { isCharacterOrderDialogOpen: boolean };
+    action(payload: { isCharacterOrderDialogOpen: boolean }): void;
   };
 
   IS_DEFAULT_STYLE_SELECT_DIALOG_OPEN: {
@@ -722,6 +997,12 @@ type UiStoreTypes = {
     action(payload: { useGpu: boolean }): void;
   };
 
+  GET_ENGINE_INFOS: {
+    action(): void;
+  };
+
+  SET_ENGINE_INFOS: { mutation: { engineInfos: EngineInfo[] } };
+
   GET_INHERIT_AUDIOINFO: {
     action(): void;
   };
@@ -729,6 +1010,15 @@ type UiStoreTypes = {
   SET_INHERIT_AUDIOINFO: {
     mutation: { inheritAudioInfo: boolean };
     action(payload: { inheritAudioInfo: boolean }): void;
+  };
+
+  GET_ACTIVE_POINT_SCROLL_MODE: {
+    action(): void;
+  };
+
+  SET_ACTIVE_POINT_SCROLL_MODE: {
+    mutation: { activePointScrollMode: ActivePointScrollMode };
+    action(payload: { activePointScrollMode: ActivePointScrollMode }): void;
   };
 
   DETECT_UNMAXIMIZED: {
@@ -751,6 +1041,20 @@ type UiStoreTypes = {
     action(): void;
   };
 
+  DETECT_ENTER_FULLSCREEN: {
+    mutation: undefined;
+    action(): void;
+  };
+
+  DETECT_LEAVE_FULLSCREEN: {
+    mutation: undefined;
+    action(): void;
+  };
+
+  IS_FULLSCREEN: {
+    getter: boolean;
+  };
+
   CHECK_EDITED_AND_NOT_SAVE: {
     action(): Promise<void>;
   };
@@ -759,6 +1063,87 @@ type UiStoreTypes = {
 export type UiGetters = StoreType<UiStoreTypes, "getter">;
 export type UiMutations = StoreType<UiStoreTypes, "mutation">;
 export type UiActions = StoreType<UiStoreTypes, "action">;
+
+/*
+  Preset Store Types
+*/
+
+export type PresetStoreState = {
+  presetKeys: string[];
+  presetItems: Record<string, Preset>;
+};
+
+type PresetStoreTypes = {
+  SET_PRESET_ITEMS: {
+    mutation: {
+      presetItems: Record<string, Preset>;
+    };
+  };
+  SET_PRESET_KEYS: {
+    mutation: {
+      presetKeys: string[];
+    };
+  };
+  GET_PRESET_CONFIG: {
+    action(): void;
+  };
+  SAVE_PRESET_ORDER: {
+    action(payload: { presetKeys: string[] }): void;
+  };
+  SAVE_PRESET_CONFIG: {
+    action(payload: {
+      presetItems: Record<string, Preset>;
+      presetKeys: string[];
+    }): void;
+  };
+  ADD_PRESET: {
+    action(payload: { presetData: Preset }): Promise<string>;
+  };
+  UPDATE_PRESET: {
+    action(payload: { presetData: Preset; presetKey: string }): void;
+  };
+  DELETE_PRESET: {
+    action(payload: { presetKey: string }): void;
+  };
+};
+
+export type PresetGetters = StoreType<PresetStoreTypes, "getter">;
+export type PresetMutations = StoreType<PresetStoreTypes, "mutation">;
+export type PresetActions = StoreType<PresetStoreTypes, "action">;
+
+/*
+ * Dictionary Store Types
+ */
+
+export type DictionaryStoreState = Record<string, unknown>;
+
+type DictionaryStoreTypes = {
+  LOAD_USER_DICT: {
+    action(): Promise<Record<string, UserDictWord>>;
+  };
+  ADD_WORD: {
+    action(payload: {
+      surface: string;
+      pronunciation: string;
+      accentType: number;
+    }): Promise<void>;
+  };
+  REWRITE_WORD: {
+    action(payload: {
+      wordUuid: string;
+      surface: string;
+      pronunciation: string;
+      accentType: number;
+    }): Promise<void>;
+  };
+  DELETE_WORD: {
+    action(payload: { wordUuid: string }): Promise<void>;
+  };
+};
+
+export type DictionaryGetters = StoreType<DictionaryStoreTypes, "getter">;
+export type DictionaryMutations = StoreType<DictionaryStoreTypes, "mutation">;
+export type DictionaryActions = StoreType<DictionaryStoreTypes, "action">;
 
 /*
  * Setting Store Types
@@ -773,6 +1158,7 @@ export type IEngineConnectorFactoryActions = ReturnType<
 type IEngineConnectorFactoryActionsMapper<K> =
   K extends keyof IEngineConnectorFactoryActions
     ? (payload: {
+        engineKey: string;
         action: K;
         payload: Parameters<IEngineConnectorFactoryActions[K]>;
       }) => ReturnType<IEngineConnectorFactoryActions[K]>
@@ -803,6 +1189,8 @@ export type State = AudioStoreState &
   ProjectStoreState &
   SettingStoreState &
   UiStoreState &
+  PresetStoreState &
+  DictionaryStoreState &
   ProxyStoreState;
 
 type AllStoreTypes = AudioStoreTypes &
@@ -812,6 +1200,8 @@ type AllStoreTypes = AudioStoreTypes &
   ProjectStoreTypes &
   SettingStoreTypes &
   UiStoreTypes &
+  PresetStoreTypes &
+  DictionaryStoreTypes &
   ProxyStoreTypes;
 
 export type AllGetters = StoreType<AllStoreTypes, "getter">;

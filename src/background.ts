@@ -5,7 +5,15 @@ import dotenv from "dotenv";
 import treeKill from "tree-kill";
 import Store from "electron-store";
 
-import { app, protocol, BrowserWindow, dialog, Menu, shell } from "electron";
+import {
+  app,
+  protocol,
+  BrowserWindow,
+  dialog,
+  Menu,
+  shell,
+  nativeTheme,
+} from "electron";
 import { createProtocol } from "vue-cli-plugin-electron-builder/lib";
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 
@@ -16,17 +24,24 @@ import { ipcMainHandle, ipcMainSend } from "@/electron/ipc";
 
 import fs from "fs";
 import {
-  CharacterInfo,
   DefaultStyleId,
   HotkeySetting,
-  MetasJson,
   SavingSetting,
+  PresetConfig,
   ThemeConf,
-  StyleInfo,
+  ExperimentalSetting,
+  AcceptRetrieveTelemetryStatus,
+  AcceptTermsStatus,
+  ToolbarSetting,
+  ActivePointScrollMode,
+  EngineInfo,
+  SplitTextWhenPasteType,
+  SplitterPosition,
 } from "./type/preload";
 
 import log from "electron-log";
 import dayjs from "dayjs";
+import windowStateKeeper from "electron-window-state";
 
 // silly以上のログをコンソールに出力
 log.transports.console.format = "[{h}:{i}:{s}.{ms}] [{level}] {text}";
@@ -40,10 +55,20 @@ log.transports.file.fileName = `${prefix}_error.log`;
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
+if (isDevelopment) {
+  app.setPath(
+    "userData",
+    path.join(app.getPath("appData"), `${app.getName()}-dev`)
+  );
+}
+
 let win: BrowserWindow;
 
 // 多重起動防止
-if (!isDevelopment && !app.requestSingleInstanceLock()) app.quit();
+if (!isDevelopment && !app.requestSingleInstanceLock()) {
+  log.info("VOICEVOX already running. Cancelling launch");
+  app.quit();
+}
 
 process.on("uncaughtException", (error) => {
   log.error(error);
@@ -52,22 +77,49 @@ process.on("unhandledRejection", (reason) => {
   log.error(reason);
 });
 
-// 設定
+// .envから設定をprocess.envに読み込み
 const appDirPath = path.dirname(app.getPath("exe"));
-const envPath = path.join(appDirPath, ".env");
-dotenv.config({ path: envPath });
+
+// NOTE: 開発版では、カレントディレクトリにある .env ファイルを読み込む。
+//       一方、配布パッケージ版では .env ファイルが実行ファイルと同じディレクトリに配置されているが、
+//       Linux・macOS ではそのディレクトリはカレントディレクトリとはならないため、.env ファイルの
+//       パスを明示的に指定する必要がある。Windows の配布パッケージ版でもこの設定で起動できるため、
+//       全 OS で共通の条件分岐とした。
+if (isDevelopment) {
+  dotenv.config({ override: true });
+} else {
+  const envPath = path.join(appDirPath, ".env");
+  dotenv.config({ path: envPath });
+}
+
 protocol.registerSchemesAsPrivileged([
   { scheme: "app", privileges: { secure: true, standard: true, stream: true } },
 ]);
 
+const isMac = process.platform === "darwin";
+
+const engineInfos: EngineInfo[] = (() => {
+  const defaultEngineInfosEnv = process.env.DEFAULT_ENGINE_INFOS;
+
+  if (defaultEngineInfosEnv) {
+    return JSON.parse(defaultEngineInfosEnv) as EngineInfo[];
+  }
+
+  return [];
+})();
+
 const defaultHotkeySettings: HotkeySetting[] = [
   {
     action: "音声書き出し",
-    combination: "Ctrl E",
+    combination: !isMac ? "Ctrl E" : "Meta E",
   },
   {
     action: "一つだけ書き出し",
     combination: "E",
+  },
+  {
+    action: "音声を繋げて書き出し",
+    combination: "",
   },
   {
     action: "再生/停止",
@@ -84,6 +136,10 @@ const defaultHotkeySettings: HotkeySetting[] = [
   {
     action: "ｲﾝﾄﾈｰｼｮﾝ欄を表示",
     combination: "2",
+  },
+  {
+    action: "長さ欄を表示",
+    combination: "3",
   },
   {
     action: "テキスト欄を追加",
@@ -103,42 +159,68 @@ const defaultHotkeySettings: HotkeySetting[] = [
   },
   {
     action: "元に戻す",
-    combination: "Ctrl Z",
+    combination: !isMac ? "Ctrl Z" : "Meta Z",
   },
   {
     action: "やり直す",
-    combination: "Ctrl Y",
+    combination: !isMac ? "Ctrl Y" : "Shift Meta Z",
   },
   {
     action: "新規プロジェクト",
-    combination: "Ctrl N",
+    combination: !isMac ? "Ctrl N" : "Meta N",
   },
   {
     action: "プロジェクトを名前を付けて保存",
-    combination: "Ctrl Shift S",
+    combination: !isMac ? "Ctrl Shift S" : "Shift Meta S",
   },
   {
     action: "プロジェクトを上書き保存",
-    combination: "Ctrl S",
+    combination: !isMac ? "Ctrl S" : "Meta S",
   },
   {
     action: "プロジェクト読み込み",
-    combination: "Ctrl O",
+    combination: !isMac ? "Ctrl O" : "Meta O",
   },
   {
     action: "テキスト読み込む",
     combination: "",
   },
+  {
+    action: "全体のイントネーションをリセット",
+    combination: !isMac ? "Ctrl G" : "Meta G",
+  },
+  {
+    action: "選択中のアクセント句のイントネーションをリセット",
+    combination: "R",
+  },
+];
+
+const defaultToolbarButtonSetting: ToolbarSetting = [
+  "PLAY_CONTINUOUSLY",
+  "STOP",
+  "EXPORT_AUDIO_ONE",
+  "EMPTY",
+  "UNDO",
+  "REDO",
 ];
 
 // 設定ファイル
 const store = new Store<{
   useGpu: boolean;
   inheritAudioInfo: boolean;
+  activePointScrollMode: ActivePointScrollMode;
   savingSetting: SavingSetting;
+  presets: PresetConfig;
   hotkeySettings: HotkeySetting[];
+  toolbarSetting: ToolbarSetting;
+  userCharacterOrder: string[];
   defaultStyleIds: DefaultStyleId[];
   currentTheme: string;
+  experimentalSetting: ExperimentalSetting;
+  acceptRetrieveTelemetry: AcceptRetrieveTelemetryStatus;
+  acceptTerms: AcceptTermsStatus;
+  splitTextWhenPaste: SplitTextWhenPasteType;
+  splitterPosition: SplitterPosition;
 }>({
   schema: {
     useGpu: {
@@ -149,6 +231,11 @@ const store = new Store<{
       type: "boolean",
       default: true,
     },
+    activePointScrollMode: {
+      type: "string",
+      enum: ["CONTINUOUSLY", "PAGE", "OFF"],
+      default: "OFF",
+    },
     savingSetting: {
       type: "object",
       properties: {
@@ -157,23 +244,31 @@ const store = new Store<{
           enum: ["UTF-8", "Shift_JIS"],
           default: "UTF-8",
         },
+        fileNamePattern: {
+          type: "string",
+          default: "",
+        },
         fixedExportEnabled: { type: "boolean", default: false },
         avoidOverwrite: { type: "boolean", default: false },
         fixedExportDir: { type: "string", default: "" },
         exportLab: { type: "boolean", default: false },
-        exportText: { type: "boolean", default: true },
+        exportText: { type: "boolean", default: false },
         outputStereo: { type: "boolean", default: false },
         outputSamplingRate: { type: "number", default: 24000 },
+        audioOutputDevice: { type: "string", default: "default" },
       },
       default: {
         fileEncoding: "UTF-8",
+        fileNamePattern: "",
         fixedExportEnabled: false,
         avoidOverwrite: false,
         fixedExportDir: "",
         exportLab: false,
-        exportText: true,
+        exportText: false,
         outputStereo: false,
         outputSamplingRate: 24000,
+        audioOutputDevice: "default",
+        splitTextWhenPaste: "PERIOD_AND_NEW_LINE",
       },
     },
     // To future developers: if you are to modify the store schema with array type,
@@ -191,6 +286,20 @@ const store = new Store<{
       },
       default: defaultHotkeySettings,
     },
+    toolbarSetting: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      default: defaultToolbarButtonSetting,
+    },
+    userCharacterOrder: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      default: [],
+    },
     defaultStyleIds: {
       type: "array",
       items: {
@@ -202,34 +311,131 @@ const store = new Store<{
       },
       default: [],
     },
+    presets: {
+      type: "object",
+      properties: {
+        items: {
+          type: "object",
+          patternProperties: {
+            // uuid
+            "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}": {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                speedScale: { type: "number" },
+                pitchScale: { type: "number" },
+                intonationScale: { type: "number" },
+                volumeScale: { type: "number" },
+                prePhonemeLength: { type: "number" },
+                postPhonemeLength: { type: "number" },
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        keys: {
+          type: "array",
+          items: {
+            type: "string",
+            pattern:
+              "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+          },
+        },
+      },
+      default: { items: {}, keys: [] },
+    },
     currentTheme: {
       type: "string",
       default: "Default",
     },
-  },
-  migrations: {
-    ">=0.7.3": (store) => {
-      const newHotkey: HotkeySetting = {
-        action: "長さ欄を表示",
-        combination: "3",
-      };
-      const hotkeys = store.get("hotkeySettings");
-      hotkeys.forEach((value) => {
-        if (value.combination == newHotkey.combination) {
-          newHotkey.combination = "";
-        }
-      });
-      hotkeys.splice(6, 0, newHotkey);
-      store.set("hotkeySettings", hotkeys);
+    experimentalSetting: {
+      type: "object",
+      properties: {
+        enablePreset: { type: "boolean", default: false },
+        enableInterrogativeUpspeak: {
+          type: "boolean",
+          default: false,
+        },
+      },
+      default: {
+        enablePreset: false,
+        enableInterrogativeUpspeak: false,
+      },
+    },
+    acceptRetrieveTelemetry: {
+      type: "string",
+      enum: ["Unconfirmed", "Accepted", "Refused"],
+      default: "Unconfirmed",
+    },
+    acceptTerms: {
+      type: "string",
+      enum: ["Unconfirmed", "Accepted", "Rejected"],
+      default: "Unconfirmed",
+    },
+    splitTextWhenPaste: {
+      type: "string",
+      enum: ["PERIOD_AND_NEW_LINE", "NEW_LINE", "OFF"],
+      default: "PERIOD_AND_NEW_LINE",
+    },
+    splitterPosition: {
+      type: "object",
+      properties: {
+        portraitPaneWidth: { type: "number" },
+        audioInfoPaneWidth: { type: "number" },
+        audioDetailPaneHeight: { type: "number" },
+      },
+      default: {},
     },
   },
+  migrations: {},
 });
 
 // engine
-let willQuitEngine = false;
-let engineProcess: ChildProcess;
-async function runEngine() {
-  willQuitEngine = false;
+type EngineProcessContainer = {
+  willQuitEngine: boolean;
+  engineProcess?: ChildProcess;
+};
+
+const engineProcessContainers: Record<string, EngineProcessContainer> = {};
+
+async function runEngineAll() {
+  log.info(`Starting ${engineInfos.length} engine/s...`);
+
+  for (const engineInfo of engineInfos) {
+    log.info(`ENGINE ${engineInfo.key}: Start launching`);
+    await runEngine(engineInfo.key);
+  }
+}
+
+async function runEngine(engineKey: string) {
+  const engineInfo = engineInfos.find(
+    (engineInfo) => engineInfo.key === engineKey
+  );
+  if (!engineInfo)
+    throw new Error(`No such engineInfo registered: key == ${engineKey}`);
+
+  if (!engineInfo.executionEnabled) {
+    log.info(`ENGINE ${engineKey}: Skipped engineInfo execution: disabled`);
+    return;
+  }
+
+  if (!engineInfo.executionFilePath) {
+    log.info(
+      `ENGINE ${engineKey}: Skipped engineInfo execution: empty executionFilePath`
+    );
+    return;
+  }
+
+  log.info(`ENGINE ${engineKey}: Starting process`);
+
+  if (!(engineKey in engineProcessContainers)) {
+    engineProcessContainers[engineKey] = {
+      willQuitEngine: false,
+    };
+  }
+
+  const engineProcessContainer = engineProcessContainers[engineKey];
+  engineProcessContainer.willQuitEngine = false;
 
   // 最初のエンジンモード
   if (!store.has("useGpu")) {
@@ -250,34 +456,39 @@ async function runEngine() {
     store.set("inheritAudioInfo", true);
   }
   const useGpu = store.get("useGpu");
-  const inheritAudioInfo = store.get("inheritAudioInfo");
 
-  log.info(`Starting ENGINE in ${useGpu ? "GPU" : "CPU"} mode`);
+  log.info(`ENGINE ${engineKey} mode: ${useGpu ? "GPU" : "CPU"}`);
 
   // エンジンプロセスの起動
   const enginePath = path.resolve(
     appDirPath,
-    process.env.ENGINE_PATH ?? "run.exe"
+    engineInfo.executionFilePath ?? "run.exe"
   );
   const args = useGpu ? ["--use_gpu"] : [];
 
-  engineProcess = spawn(enginePath, args, {
+  log.info(`ENGINE ${engineKey} path: ${enginePath}`);
+  log.info(`ENGINE ${engineKey} args: ${JSON.stringify(args)}`);
+
+  const engineProcess = spawn(enginePath, args, {
     cwd: path.dirname(enginePath),
   });
+  engineProcessContainer.engineProcess = engineProcess;
 
   engineProcess.stdout?.on("data", (data) => {
-    log.info("ENGINE: " + data.toString("utf-8"));
+    log.info(`ENGINE ${engineKey} STDOUT: ${data.toString("utf-8")}`);
   });
 
   engineProcess.stderr?.on("data", (data) => {
-    log.error("ENGINE: " + data.toString("utf-8"));
+    log.error(`ENGINE ${engineKey} STDERR: ${data.toString("utf-8")}`);
   });
 
   engineProcess.on("close", (code, signal) => {
-    log.info(`ENGINE: terminated due to receipt of signal ${signal}`);
-    log.info(`ENGINE: exited with code ${code}`);
+    log.info(
+      `ENGINE ${engineKey}: Process terminated due to receipt of signal ${signal}`
+    );
+    log.info(`ENGINE ${engineKey}: Process exited with code ${code}`);
 
-    if (!willQuitEngine) {
+    if (!engineProcessContainer.willQuitEngine) {
       ipcMainSend(win, "DETECTED_ENGINE_ERROR");
       dialog.showErrorBox(
         "音声合成エンジンエラー",
@@ -287,54 +498,191 @@ async function runEngine() {
   });
 }
 
+function killEngineAll({
+  onFirstKillStart,
+  onAllKilled,
+  onError,
+}: {
+  onFirstKillStart?: VoidFunction;
+  onAllKilled?: VoidFunction;
+  onError?: (engineKey: string, message: unknown) => void;
+}) {
+  let anyKillStart = false;
+
+  const numEngineProcess = Object.keys(engineProcessContainers).length;
+  let numEngineProcessKilled = 0;
+
+  for (const [engineKey] of Object.entries(engineProcessContainers)) {
+    killEngine({
+      engineKey,
+      onKillStart: () => {
+        if (!anyKillStart) {
+          anyKillStart = true;
+          onFirstKillStart?.();
+        }
+      },
+      onKilled: () => {
+        numEngineProcessKilled++;
+        log.info(
+          `ENGINE ${numEngineProcessKilled} / ${numEngineProcess} processes killed`
+        );
+
+        if (numEngineProcessKilled === numEngineProcess) {
+          onAllKilled?.();
+        }
+      },
+      onError: (message) => {
+        onError?.(engineKey, message);
+
+        // エディタを終了するため、エラーが起きてもエンジンプロセスをキルできたとみなして次のエンジンプロセスをキルする
+        numEngineProcessKilled++;
+        log.info(
+          `ENGINE ${engineKey}: process kill errored, but assume to have been killed`
+        );
+        log.info(
+          `ENGINE ${numEngineProcessKilled} / ${numEngineProcess} processes killed`
+        );
+
+        if (numEngineProcessKilled === numEngineProcess) {
+          onAllKilled?.();
+        }
+      },
+    });
+  }
+}
+
+function killEngine({
+  engineKey,
+  onKillStart,
+  onKilled,
+  onError,
+}: {
+  engineKey: string;
+  onKillStart?: VoidFunction;
+  onKilled?: VoidFunction;
+  onError?: (error: unknown) => void;
+}) {
+  // この関数では、呼び出し元に結果を通知するためonKilledまたはonErrorを同期または非同期で必ず呼び出さなければならない
+
+  const engineProcessContainer = engineProcessContainers[engineKey];
+  if (!engineProcessContainer) {
+    onError?.(`No such engineProcessContainer: key == ${engineKey}`);
+    return;
+  }
+
+  const engineProcess = engineProcessContainer.engineProcess;
+  if (engineProcess == undefined) {
+    // nop if no process started (already killed or not started yet)
+    log.info(`ENGINE ${engineKey}: Process not started`);
+    onKilled?.();
+    return;
+  }
+
+  // considering the case that ENGINE process killed after checking process status
+  engineProcess.once("close", () => {
+    log.info(`ENGINE ${engineKey}: Process closed`);
+    onKilled?.();
+  });
+
+  log.info(
+    `ENGINE ${engineKey}: last exit code: ${engineProcess.exitCode}, signal: ${engineProcess.signalCode}`
+  );
+
+  const engineNotExited = engineProcess.exitCode === null;
+  const engineNotKilled = engineProcess.signalCode === null;
+
+  if (engineNotExited && engineNotKilled) {
+    log.info(`ENGINE ${engineKey}: Killing process (PID=${engineProcess.pid})`);
+    onKillStart?.();
+
+    engineProcessContainer.willQuitEngine = true;
+    try {
+      engineProcess.pid != undefined && treeKill(engineProcess.pid);
+    } catch (error: unknown) {
+      log.error(`ENGINE ${engineKey}: Error during killing process`);
+      onError?.(error);
+    }
+  } else {
+    log.info(`ENGINE ${engineKey}: Process already closed`);
+    onKilled?.();
+  }
+}
+
+async function restartEngineAll() {
+  for (const engineInfo of engineInfos) {
+    await restartEngine(engineInfo.key);
+  }
+}
+
+async function restartEngine(engineKey: string) {
+  await new Promise<void>((resolve, reject) => {
+    const engineProcessContainer: EngineProcessContainer | undefined =
+      engineProcessContainers[engineKey];
+    const engineProcess = engineProcessContainer?.engineProcess;
+
+    log.info(
+      `ENGINE ${engineKey}: Restarting process (last exit code: ${engineProcess?.exitCode}, signal: ${engineProcess?.signalCode})`
+    );
+
+    // エンジンのプロセスがすでに終了している、またはkillされている場合
+    const engineExited = engineProcess?.exitCode !== null;
+    const engineKilled = engineProcess?.signalCode !== null;
+
+    // engineProcess === undefinedの場合true
+    if (engineExited || engineKilled) {
+      log.info(
+        `ENGINE ${engineKey}: Process is not started yet or already killed. Starting process...`
+      );
+
+      runEngine(engineKey);
+      resolve();
+      return;
+    }
+
+    // エンジンエラー時のエラーウィンドウ抑制用。
+    engineProcessContainer.willQuitEngine = true;
+
+    // 「killに使用するコマンドが終了するタイミング」と「OSがプロセスをkillするタイミング」が違うので単純にtreeKillのコールバック関数でrunEngine()を実行すると失敗します。
+    // closeイベントはexitイベントよりも後に発火します。
+    const restartEngineOnProcessClosedCallback = () => {
+      log.info(`ENGINE ${engineKey}: Process killed. Restarting process...`);
+
+      runEngine(engineKey);
+      resolve();
+    };
+    engineProcess.once("close", restartEngineOnProcessClosedCallback);
+
+    // treeKillのコールバック関数はコマンドが終了した時に呼ばれます。
+    log.info(
+      `ENGINE ${engineKey}: Killing current process (PID=${engineProcess.pid})...`
+    );
+    treeKill(engineProcess.pid, (error) => {
+      // error変数の値がundefined以外であればkillコマンドが失敗したことを意味します。
+      if (error != null) {
+        log.error(`ENGINE ${engineKey}: Failed to kill process`);
+        log.error(error);
+
+        // killに失敗したとき、closeイベントが発生せず、once listenerが消費されない
+        // listenerを削除してENGINEの意図しない再起動を防止
+        engineProcess.removeListener(
+          "close",
+          restartEngineOnProcessClosedCallback
+        );
+
+        reject();
+      }
+    });
+  });
+}
+
 // temp dir
 const tempDir = path.join(app.getPath("temp"), "VOICEVOX");
 if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir);
 }
 
-// キャラクター情報の読み込み
-declare let __static: string;
-const characterInfos: CharacterInfo[] = [];
-for (const dirRelPath of fs.readdirSync(path.join(__static, "characters"))) {
-  const dirPath = path.join("characters", dirRelPath);
-  const policy = fs.readFileSync(
-    path.join(__static, dirPath, "policy.md"),
-    "utf-8"
-  );
-  const {
-    speakerName,
-    speakerUuid,
-    styles: stylesOrigin,
-  }: MetasJson = JSON.parse(
-    fs.readFileSync(path.join(__static, dirPath, "metas.json"), "utf-8")
-  );
-  const styles = stylesOrigin.map<StyleInfo>(({ styleName, styleId }) => ({
-    styleName,
-    styleId,
-    iconPath: path.join(dirPath, "icons", `${speakerName}_${styleId}.png`),
-    voiceSamplePaths: [...Array(3).keys()].map((x) =>
-      path.join(
-        dirPath,
-        "voice_samples",
-        `${speakerName}_${styleId}_${(x + 1).toString().padStart(3, "0")}.wav`
-      )
-    ),
-  }));
-  const portraitPath = path.join(dirPath, "portrait.png");
-
-  characterInfos.push({
-    portraitPath,
-    metas: {
-      speakerName,
-      speakerUuid,
-      styles,
-      policy,
-    },
-  });
-}
-
 // 使い方テキストの読み込み
+declare let __static: string;
 const howToUseText = fs.readFileSync(
   path.join(__static, "howtouse.md"),
   "utf-8"
@@ -354,6 +702,12 @@ const ossLicenses = JSON.parse(
   fs.readFileSync(path.join(__static, "licenses.json"), { encoding: "utf-8" })
 );
 
+// 問い合わせの読み込み
+const contactText = fs.readFileSync(path.join(__static, "contact.md"), "utf-8");
+
+// Q&Aの読み込み
+const qAndAText = fs.readFileSync(path.join(__static, "qAndA.md"), "utf-8");
+
 // アップデート情報の読み込み
 const updateInfos = JSON.parse(
   fs.readFileSync(path.join(__static, "updateInfos.json"), {
@@ -361,13 +715,70 @@ const updateInfos = JSON.parse(
   })
 );
 
+const privacyPolicyText = fs.readFileSync(
+  path.join(__static, "privacyPolicy.md"),
+  "utf-8"
+);
+
+// hotkeySettingsのマイグレーション
+function migrateHotkeySettings() {
+  const COMBINATION_IS_NONE = "####";
+  const loadedHotkeys = store.get("hotkeySettings");
+  const hotkeysWithoutNewCombination = defaultHotkeySettings.map(
+    (defaultHotkey) => {
+      const loadedHotkey = loadedHotkeys.find(
+        (loadedHotkey) => loadedHotkey.action === defaultHotkey.action
+      );
+      const hotkeyWithoutCombination: HotkeySetting = {
+        action: defaultHotkey.action,
+        combination: COMBINATION_IS_NONE,
+      };
+      return loadedHotkey || hotkeyWithoutCombination;
+    }
+  );
+  const migratedHotkeys = hotkeysWithoutNewCombination.map((hotkey) => {
+    if (hotkey.combination === COMBINATION_IS_NONE) {
+      const newHotkey =
+        defaultHotkeySettings.find(
+          (defaultHotkey) => defaultHotkey.action === hotkey.action
+        ) || hotkey; // ここの find が undefined を返すケースはないが、ts のエラーになるので入れた
+      const combinationExists = hotkeysWithoutNewCombination.some(
+        (hotkey) => hotkey.combination === newHotkey.combination
+      );
+      if (combinationExists) {
+        const emptyHotkey = {
+          action: newHotkey.action,
+          combination: "",
+        };
+        return emptyHotkey;
+      } else {
+        return newHotkey;
+      }
+    } else {
+      return hotkey;
+    }
+  });
+  store.set("hotkeySettings", migratedHotkeys);
+}
+migrateHotkeySettings();
+
 let willQuit = false;
+let filePathOnMac: string | null = null;
 // create window
 async function createWindow() {
+  const mainWindowState = windowStateKeeper({
+    defaultWidth: 800,
+    defaultHeight: 600,
+  });
+
   win = new BrowserWindow({
-    width: 800,
-    height: 600,
+    x: mainWindowState.x,
+    y: mainWindowState.y,
+    width: mainWindowState.width,
+    height: mainWindowState.height,
     frame: false,
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 6, y: 4 },
     minWidth: 320,
     show: false,
     webPreferences: {
@@ -388,8 +799,17 @@ async function createWindow() {
   }
   if (isDevelopment) win.webContents.openDevTools();
 
+  // Macではdarkモードかつウィンドウが非アクティブのときに閉じるボタンなどが見えなくなるので、lightモードに固定
+  if (isMac) nativeTheme.themeSource = "light";
+
   win.on("maximize", () => win.webContents.send("DETECT_MAXIMIZED"));
   win.on("unmaximize", () => win.webContents.send("DETECT_UNMAXIMIZED"));
+  win.on("enter-full-screen", () =>
+    win.webContents.send("DETECT_ENTER_FULLSCREEN")
+  );
+  win.on("leave-full-screen", () =>
+    win.webContents.send("DETECT_LEAVE_FULLSCREEN")
+  );
   win.on("always-on-top-changed", () => {
     win.webContents.send(
       win.isAlwaysOnTop() ? "DETECT_PINNED" : "DETECT_UNPINNED"
@@ -403,16 +823,57 @@ async function createWindow() {
     }
   });
 
+  win.on("resize", () => {
+    const windowSize = win.getSize();
+    win.webContents.send("DETECT_RESIZED", {
+      width: windowSize[0],
+      height: windowSize[1],
+    });
+  });
+
   win.webContents.once("did-finish-load", () => {
-    if (process.argv.length >= 2) {
-      const filePath = process.argv[1];
-      ipcMainSend(win, "LOAD_PROJECT_FILE", { filePath, confirm: false });
+    if (isMac) {
+      if (filePathOnMac != null) {
+        ipcMainSend(win, "LOAD_PROJECT_FILE", {
+          filePath: filePathOnMac,
+          confirm: false,
+        });
+        filePathOnMac = null;
+      }
+    } else {
+      if (process.argv.length >= 2) {
+        const filePath = process.argv[1];
+        ipcMainSend(win, "LOAD_PROJECT_FILE", { filePath, confirm: false });
+      }
     }
   });
+
+  mainWindowState.manage(win);
 }
 
-if (!isDevelopment) {
-  Menu.setApplicationMenu(null);
+const menuTemplateForMac: Electron.MenuItemConstructorOptions[] = [
+  {
+    label: "VOICEVOX",
+    submenu: [{ role: "quit" }],
+  },
+  {
+    label: "Edit",
+    submenu: [
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "selectAll" },
+    ],
+  },
+];
+
+// For macOS, set the native menu to enable shortcut keys such as 'Cmd + V'.
+if (isMac) {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplateForMac));
+} else {
+  if (!isDevelopment) {
+    Menu.setApplicationMenu(null);
+  }
 }
 
 // プロセス間通信
@@ -427,10 +888,6 @@ ipcMainHandle("GET_APP_INFOS", () => {
 
 ipcMainHandle("GET_TEMP_DIR", () => {
   return tempDir;
-});
-
-ipcMainHandle("GET_CHARACTER_INFOS", () => {
-  return characterInfos;
 });
 
 ipcMainHandle("GET_HOW_TO_USE_TEXT", () => {
@@ -453,65 +910,113 @@ ipcMainHandle("GET_OSS_COMMUNITY_INFOS", () => {
   return ossCommunityInfos;
 });
 
-ipcMainHandle("SHOW_AUDIO_SAVE_DIALOG", (_, { title, defaultPath }) => {
-  return dialog.showSaveDialogSync(win, {
+ipcMainHandle("GET_CONTACT_TEXT", () => {
+  return contactText;
+});
+
+ipcMainHandle("GET_Q_AND_A_TEXT", () => {
+  return qAndAText;
+});
+
+ipcMainHandle("GET_PRIVACY_POLICY_TEXT", () => {
+  return privacyPolicyText;
+});
+
+ipcMainHandle("SHOW_AUDIO_SAVE_DIALOG", async (_, { title, defaultPath }) => {
+  const result = await dialog.showSaveDialog(win, {
     title,
     defaultPath,
     filters: [{ name: "Wave File", extensions: ["wav"] }],
     properties: ["createDirectory"],
   });
+  return result.filePath;
 });
 
-ipcMainHandle("SHOW_OPEN_DIRECTORY_DIALOG", (_, { title }) => {
-  return dialog.showOpenDialogSync(win, {
+ipcMainHandle("SHOW_TEXT_SAVE_DIALOG", async (_, { title, defaultPath }) => {
+  const result = await dialog.showSaveDialog(win, {
+    title,
+    defaultPath,
+    filters: [{ name: "Text File", extensions: ["txt"] }],
+    properties: ["createDirectory"],
+  });
+  return result.filePath;
+});
+
+ipcMainHandle("SHOW_OPEN_DIRECTORY_DIALOG", async (_, { title }) => {
+  const result = await dialog.showOpenDialog(win, {
     title,
     properties: ["openDirectory", "createDirectory"],
-  })?.[0];
+  });
+  if (result.canceled) {
+    return undefined;
+  }
+  return result.filePaths[0];
 });
 
-ipcMainHandle("SHOW_PROJECT_SAVE_DIALOG", (_, { title }) => {
-  return dialog.showSaveDialogSync(win, {
+ipcMainHandle("SHOW_PROJECT_SAVE_DIALOG", async (_, { title, defaultPath }) => {
+  const result = await dialog.showSaveDialog(win, {
     title,
+    defaultPath,
     filters: [{ name: "VOICEVOX Project file", extensions: ["vvproj"] }],
     properties: ["showOverwriteConfirmation"],
   });
+  if (result.canceled) {
+    return undefined;
+  }
+  return result.filePath;
 });
 
-ipcMainHandle("SHOW_PROJECT_LOAD_DIALOG", (_, { title }) => {
-  return dialog.showOpenDialogSync(win, {
+ipcMainHandle("SHOW_PROJECT_LOAD_DIALOG", async (_, { title }) => {
+  const result = await dialog.showOpenDialog(win, {
     title,
     filters: [{ name: "VOICEVOX Project file", extensions: ["vvproj"] }],
     properties: ["openFile"],
   });
+  if (result.canceled) {
+    return undefined;
+  }
+  return result.filePaths;
 });
 
-ipcMainHandle("SHOW_INFO_DIALOG", (_, { title, message, buttons }) => {
-  return dialog
-    .showMessageBox(win, {
-      type: "info",
-      buttons: buttons,
-      title: title,
-      message: message,
-      noLink: true,
-    })
-    .then((value) => {
-      return value.response;
-    });
+ipcMainHandle("SHOW_MESSAGE_DIALOG", (_, { type, title, message }) => {
+  return dialog.showMessageBox(win, {
+    type,
+    title,
+    message,
+  });
 });
+
+ipcMainHandle(
+  "SHOW_QUESTION_DIALOG",
+  (_, { type, title, message, buttons, cancelId }) => {
+    return dialog
+      .showMessageBox(win, {
+        type,
+        buttons,
+        title,
+        message,
+        noLink: true,
+        cancelId,
+      })
+      .then((value) => {
+        return value.response;
+      });
+  }
+);
 
 ipcMainHandle("SHOW_WARNING_DIALOG", (_, { title, message }) => {
   return dialog.showMessageBox(win, {
     type: "warning",
-    title: title,
-    message: message,
+    title,
+    message,
   });
 });
 
 ipcMainHandle("SHOW_ERROR_DIALOG", (_, { title, message }) => {
   return dialog.showMessageBox(win, {
     type: "error",
-    title: title,
-    message: message,
+    title,
+    message,
   });
 });
 
@@ -543,6 +1048,14 @@ ipcMainHandle("INHERIT_AUDIOINFO", (_, { newValue }) => {
   return store.get("inheritAudioInfo", false);
 });
 
+ipcMainHandle("ACTIVE_POINT_SCROLL_MODE", (_, { newValue }) => {
+  if (newValue !== undefined) {
+    store.set("activePointScrollMode", newValue);
+  }
+
+  return store.get("activePointScrollMode", "OFF");
+});
+
 ipcMainHandle("IS_AVAILABLE_GPU_MODE", () => {
   return hasSupportedGpu();
 });
@@ -569,71 +1082,35 @@ ipcMainHandle("LOG_INFO", (_, ...params) => {
   log.info(...params);
 });
 
+ipcMainHandle("ENGINE_INFOS", () => {
+  // エンジン情報を設定ファイルに保存しないためにstoreではなくグローバル変数を使用する
+  return engineInfos;
+});
+
 /**
  * エンジンを再起動する。
  * エンジンの起動が開始したらresolve、起動が失敗したらreject。
  */
-ipcMainHandle(
-  "RESTART_ENGINE",
-  () =>
-    new Promise<void>((resolve, reject) => {
-      log.info(
-        `Restarting ENGINE (last exit code: ${engineProcess.exitCode}, signal: ${engineProcess.signalCode})`
-      );
+ipcMainHandle("RESTART_ENGINE_ALL", async () => {
+  await restartEngineAll();
+});
 
-      // エンジンのプロセスがすでに終了している、またはkillされている場合
-      const engineExited = engineProcess.exitCode !== null;
-      const engineKilled = engineProcess.signalCode !== null;
-
-      if (engineExited || engineKilled) {
-        log.info(
-          "ENGINE process is not started yet or already killed. Starting ENGINE..."
-        );
-
-        runEngine();
-        resolve();
-        return;
-      }
-
-      // エンジンエラー時のエラーウィンドウ抑制用。
-      willQuitEngine = true;
-
-      // 「killに使用するコマンドが終了するタイミング」と「OSがプロセスをkillするタイミング」が違うので単純にtreeKillのコールバック関数でrunEngine()を実行すると失敗します。
-      // closeイベントはexitイベントよりも後に発火します。
-      const restartEngineOnProcessClosedCallback = () => {
-        log.info("ENGINE process killed. Restarting ENGINE...");
-
-        runEngine();
-        resolve();
-      };
-      engineProcess.once("close", restartEngineOnProcessClosedCallback);
-
-      // treeKillのコールバック関数はコマンドが終了した時に呼ばれます。
-      log.info(`Killing current ENGINE process (PID=${engineProcess.pid})...`);
-      treeKill(engineProcess.pid, (error) => {
-        // error変数の値がundefined以外であればkillコマンドが失敗したことを意味します。
-        if (error != null) {
-          log.error("Failed to kill ENGINE");
-          log.error(error);
-
-          // killに失敗したとき、closeイベントが発生せず、once listenerが消費されない
-          // listenerを削除してENGINEの意図しない再起動を防止
-          engineProcess.removeListener(
-            "close",
-            restartEngineOnProcessClosedCallback
-          );
-
-          reject();
-        }
-      });
-    })
-);
+ipcMainHandle("RESTART_ENGINE", async (_, { engineKey }) => {
+  await restartEngine(engineKey);
+});
 
 ipcMainHandle("SAVING_SETTING", (_, { newData }) => {
   if (newData !== undefined) {
     store.set("savingSetting", newData);
   }
   return store.get("savingSetting");
+});
+
+ipcMainHandle("TOOLBAR_SETTING", (_, { newData }) => {
+  if (newData !== undefined) {
+    store.set("toolbarSetting", newData);
+  }
+  return store.get("toolbarSetting");
 });
 
 ipcMainHandle("HOTKEY_SETTINGS", (_, { newData }) => {
@@ -680,20 +1157,29 @@ ipcMainHandle("CHANGE_PIN_WINDOW", () => {
   }
 });
 
-ipcMainHandle("IS_UNSET_DEFAULT_STYLE_IDS", () => {
-  return store.get("defaultStyleIds").length === 0;
+ipcMainHandle("SAVING_PRESETS", (_, { newPresets }) => {
+  if (newPresets !== undefined) {
+    store.set("presets.items", newPresets.presetItems);
+    store.set("presets.keys", newPresets.presetKeys);
+  }
+  return store.get("presets");
+});
+
+ipcMainHandle("GET_USER_CHARACTER_ORDER", () => {
+  return store.get("userCharacterOrder");
+});
+
+ipcMainHandle("SET_USER_CHARACTER_ORDER", (_, userCharacterOrder) => {
+  store.set("userCharacterOrder", userCharacterOrder);
+});
+
+ipcMainHandle("IS_UNSET_DEFAULT_STYLE_ID", (_, speakerUuid) => {
+  const defaultStyleIds = store.get("defaultStyleIds");
+  return !defaultStyleIds.find((style) => style.speakerUuid === speakerUuid);
 });
 
 ipcMainHandle("GET_DEFAULT_STYLE_IDS", () => {
-  const defaultStyleIds = store.get("defaultStyleIds");
-  if (defaultStyleIds.length === 0) {
-    return characterInfos.map<DefaultStyleId>((info) => ({
-      speakerUuid: info.metas.speakerUuid,
-      defaultStyleId: info.metas.styles[0].styleId,
-    }));
-  } else {
-    return defaultStyleIds;
-  }
+  return store.get("defaultStyleIds");
 });
 
 ipcMainHandle("SET_DEFAULT_STYLE_IDS", (_, defaultStyleIds) => {
@@ -702,6 +1188,50 @@ ipcMainHandle("SET_DEFAULT_STYLE_IDS", (_, defaultStyleIds) => {
 
 ipcMainHandle("GET_DEFAULT_HOTKEY_SETTINGS", () => {
   return defaultHotkeySettings;
+});
+
+ipcMainHandle("GET_DEFAULT_TOOLBAR_SETTING", () => {
+  return defaultToolbarButtonSetting;
+});
+
+ipcMainHandle("GET_ACCEPT_RETRIEVE_TELEMETRY", () => {
+  return store.get("acceptRetrieveTelemetry");
+});
+
+ipcMainHandle("SET_ACCEPT_RETRIEVE_TELEMETRY", (_, acceptRetrieveTelemetry) => {
+  store.set("acceptRetrieveTelemetry", acceptRetrieveTelemetry);
+});
+
+ipcMainHandle("GET_ACCEPT_TERMS", () => {
+  return store.get("acceptTems");
+});
+
+ipcMainHandle("SET_ACCEPT_TERMS", (_, acceptTerms) => {
+  store.set("acceptTems", acceptTerms);
+});
+
+ipcMainHandle("GET_EXPERIMENTAL_SETTING", () => {
+  return store.get("experimentalSetting");
+});
+
+ipcMainHandle("SET_EXPERIMENTAL_SETTING", (_, experimentalSetting) => {
+  store.set("experimentalSetting", experimentalSetting);
+});
+
+ipcMainHandle("GET_SPLIT_TEXT_WHEN_PASTE", () => {
+  return store.get("splitTextWhenPaste");
+});
+
+ipcMainHandle("SET_SPLIT_TEXT_WHEN_PASTE", (_, splitTextWhenPaste) => {
+  store.set("splitTextWhenPaste", splitTextWhenPaste);
+});
+
+ipcMainHandle("GET_SPLITTER_POSITION", () => {
+  return store.get("splitterPosition");
+});
+
+ipcMainHandle("SET_SPLITTER_POSITION", (_, splitterPosition) => {
+  store.set("splitterPosition", splitterPosition);
 });
 
 // app callback
@@ -717,9 +1247,8 @@ app.on("web-contents-created", (e, contents) => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  log.info("All windows closed. Quitting app");
+  app.quit();
 });
 
 // Called before window closing
@@ -730,36 +1259,43 @@ app.on("before-quit", (event) => {
     return;
   }
 
-  // considering the case that ENGINE process killed after checking process status
-  engineProcess.once("close", () => {
-    log.info("ENGINE killed. Quitting app");
-    app.quit(); // attempt to quit app again
+  let anyKillStart = false;
+
+  log.info("Checking ENGINE status before app quit");
+  killEngineAll({
+    onFirstKillStart: () => {
+      anyKillStart = true;
+
+      // executed synchronously to cancel before-quit event
+      log.info("Interrupt app quit to kill ENGINE processes");
+      event.preventDefault();
+    },
+    onAllKilled: () => {
+      // executed asynchronously
+      if (anyKillStart) {
+        log.info("All ENGINE process killed. Quitting app");
+        app.quit(); // attempt to quit app again
+      }
+      // else: before-quit event is not cancelled
+    },
+    onError: (engineKey, message) => {
+      log.error(
+        `ENGINE ${engineKey}: Error during killing process: ${message}`
+      );
+    },
   });
-
-  log.info(
-    `Quitting app (ENGINE last exit code: ${engineProcess.exitCode}, signal: ${engineProcess.signalCode})`
-  );
-
-  const engineNotExited = engineProcess.exitCode === null;
-  const engineNotKilled = engineProcess.signalCode === null;
-
-  if (engineNotExited && engineNotKilled) {
-    log.info("Killing ENGINE before app quit");
-    event.preventDefault();
-
-    log.info(`Killing ENGINE (PID=${engineProcess.pid})...`);
-    willQuitEngine = true;
-    try {
-      engineProcess.pid != undefined && treeKill(engineProcess.pid);
-    } catch (error: unknown) {
-      log.error("engine kill error");
-      log.error(error);
-    }
-  }
 });
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+app.once("will-finish-launching", () => {
+  // macOS only
+  app.once("open-file", (event, filePath) => {
+    event.preventDefault();
+    filePathOnMac = filePath;
+  });
 });
 
 app.on("ready", async () => {
@@ -773,7 +1309,7 @@ app.on("ready", async () => {
     }
   }
 
-  createWindow().then(() => runEngine());
+  createWindow().then(() => runEngineAll());
 });
 
 app.on("second-instance", () => {
@@ -787,6 +1323,7 @@ if (isDevelopment) {
   if (process.platform === "win32") {
     process.on("message", (data) => {
       if (data === "graceful-exit") {
+        log.info("Received graceful-exit");
         app.quit();
       }
     });

@@ -1,10 +1,9 @@
 <template>
   <q-dialog
     maximized
-    seamless
     transition-show="jump-up"
     transition-hide="jump-down"
-    class="help-dialog"
+    class="help-dialog transparent-backdrop"
     v-model="modelValueComputed"
   >
     <q-layout container view="hHh Lpr lff">
@@ -77,7 +76,8 @@ import HowToUse from "@/components/HowToUse.vue";
 import OssLicense from "@/components/OssLicense.vue";
 import UpdateInfo from "@/components/UpdateInfo.vue";
 import OssCommunityInfo from "@/components/OssCommunityInfo.vue";
-
+import QAndA from "@/components/QAndA.vue";
+import ContactInfo from "@/components/ContactInfo.vue";
 type Page = {
   name: string;
   component: Component;
@@ -124,6 +124,14 @@ export default defineComponent({
         name: "アップデート情報",
         component: UpdateInfo,
       },
+      {
+        name: "よくあるご質問",
+        component: QAndA,
+      },
+      {
+        name: "お問い合わせ",
+        component: ContactInfo,
+      },
     ];
 
     const selectedPage = ref(pagedata[0].name);
@@ -137,8 +145,8 @@ export default defineComponent({
 });
 </script>
 
-<style lang="scss" scoped>
-@use '@/styles' as global;
+<style scoped lang="scss">
+@use '@/styles/colors' as colors;
 
 .help-dialog .q-layout-container :deep(.absolute-full) {
   right: 0 !important;
@@ -151,7 +159,7 @@ export default defineComponent({
 }
 
 .selected-item {
-  background-color: rgba(global.$primary-rgb, 0.4);
-  color: var(--color-display);
+  background-color: rgba(colors.$primary-rgb, 0.4);
+  color: colors.$display;
 }
 </style>

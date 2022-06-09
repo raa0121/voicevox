@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 
 import { Sandbox } from "@/type/preload";
+import { SystemError } from "@/store/type";
 
 function ipcRendererInvoke<T extends keyof IpcIHData>(
   channel: T,
@@ -35,10 +36,6 @@ const api: Sandbox = {
     return await ipcRendererInvoke("GET_APP_INFOS");
   },
 
-  getCharacterInfos: async () => {
-    return await ipcRendererInvoke("GET_CHARACTER_INFOS");
-  },
-
   getHowToUseText: async () => {
     return await ipcRendererInvoke("GET_HOW_TO_USE_TEXT");
   },
@@ -55,8 +52,20 @@ const api: Sandbox = {
     return await ipcRendererInvoke("GET_UPDATE_INFOS");
   },
 
+  getContactText: async () => {
+    return await ipcRendererInvoke("GET_CONTACT_TEXT");
+  },
+
+  getQAndAText: async () => {
+    return await ipcRendererInvoke("GET_Q_AND_A_TEXT");
+  },
+
   getOssCommunityInfos: async () => {
     return await ipcRendererInvoke("GET_OSS_COMMUNITY_INFOS");
+  },
+
+  getPrivacyPolicyText: async () => {
+    return await ipcRendererInvoke("GET_PRIVACY_POLICY_TEXT");
   },
 
   saveTempAudioFile: async ({ relativePath, buffer }) => {
@@ -88,28 +97,37 @@ const api: Sandbox = {
     return ipcRendererInvoke("SHOW_AUDIO_SAVE_DIALOG", { title, defaultPath });
   },
 
+  showTextSaveDialog: ({ title, defaultPath }) => {
+    return ipcRendererInvoke("SHOW_TEXT_SAVE_DIALOG", { title, defaultPath });
+  },
+
   showOpenDirectoryDialog: ({ title }) => {
     return ipcRendererInvoke("SHOW_OPEN_DIRECTORY_DIALOG", { title });
   },
 
-  showProjectSaveDialog: ({ title }) => {
-    return ipcRendererInvoke("SHOW_PROJECT_SAVE_DIALOG", { title });
+  showProjectSaveDialog: ({ title, defaultPath }) => {
+    return ipcRendererInvoke("SHOW_PROJECT_SAVE_DIALOG", {
+      title,
+      defaultPath,
+    });
   },
 
   showProjectLoadDialog: ({ title }) => {
     return ipcRendererInvoke("SHOW_PROJECT_LOAD_DIALOG", { title });
   },
 
-  showInfoDialog: ({ title, message, buttons }) => {
-    return ipcRendererInvoke("SHOW_INFO_DIALOG", { title, message, buttons });
+  showMessageDialog: ({ type, title, message }) => {
+    return ipcRendererInvoke("SHOW_MESSAGE_DIALOG", { type, title, message });
   },
 
-  showWarningDialog: ({ title, message }) => {
-    return ipcRendererInvoke("SHOW_WARNING_DIALOG", { title, message });
-  },
-
-  showErrorDialog: ({ title, message }) => {
-    return ipcRendererInvoke("SHOW_ERROR_DIALOG", { title, message });
+  showQuestionDialog: ({ type, title, message, buttons, cancelId }) => {
+    return ipcRendererInvoke("SHOW_QUESTION_DIALOG", {
+      type,
+      title,
+      message,
+      buttons,
+      cancelId,
+    });
   },
 
   showImportFileDialog: ({ title }) => {
@@ -117,7 +135,15 @@ const api: Sandbox = {
   },
 
   writeFile: ({ filePath, buffer }) => {
-    fs.writeFileSync(filePath, new DataView(buffer));
+    try {
+      // throwだと`.code`の情報が消えるのでreturn
+      fs.writeFileSync(filePath, new DataView(buffer));
+    } catch (e) {
+      const a = e as SystemError;
+      return { code: a.code, message: a.message };
+    }
+
+    return undefined;
   },
 
   readFile: ({ filePath }) => {
@@ -134,6 +160,10 @@ const api: Sandbox = {
 
   inheritAudioInfo: (newValue) => {
     return ipcRendererInvoke("INHERIT_AUDIOINFO", { newValue });
+  },
+
+  activePointScrollMode: (newValue) => {
+    return ipcRendererInvoke("ACTIVE_POINT_SCROLL_MODE", { newValue });
   },
 
   isAvailableGPUMode: () => {
@@ -164,8 +194,12 @@ const api: Sandbox = {
     return ipcRenderer.invoke("LOG_INFO", ...params);
   },
 
-  restartEngine: () => {
-    return ipcRendererInvoke("RESTART_ENGINE");
+  engineInfos: () => {
+    return ipcRendererInvoke("ENGINE_INFOS");
+  },
+
+  restartEngine: (engineKey) => {
+    return ipcRendererInvoke("RESTART_ENGINE", { engineKey: engineKey });
   },
 
   savingSetting: (newData) => {
@@ -180,12 +214,28 @@ const api: Sandbox = {
     ipcRenderer.invoke("CHANGE_PIN_WINDOW");
   },
 
+  savingPresets: (newPresets) => {
+    return ipcRenderer.invoke("SAVING_PRESETS", { newPresets });
+  },
+
   hotkeySettings: (newData) => {
     return ipcRenderer.invoke("HOTKEY_SETTINGS", { newData });
   },
 
-  isUnsetDefaultStyleIds: async () => {
-    return await ipcRendererInvoke("IS_UNSET_DEFAULT_STYLE_IDS");
+  toolbarSetting: (newData) => {
+    return ipcRenderer.invoke("TOOLBAR_SETTING", { newData });
+  },
+
+  getUserCharacterOrder: async () => {
+    return await ipcRendererInvoke("GET_USER_CHARACTER_ORDER");
+  },
+
+  setUserCharacterOrder: async (userCharacterOrder) => {
+    await ipcRendererInvoke("SET_USER_CHARACTER_ORDER", userCharacterOrder);
+  },
+
+  isUnsetDefaultStyleId: async (speakerUuid: string) => {
+    return await ipcRendererInvoke("IS_UNSET_DEFAULT_STYLE_ID", speakerUuid);
   },
 
   getDefaultStyleIds: async () => {
@@ -196,8 +246,47 @@ const api: Sandbox = {
     await ipcRendererInvoke("SET_DEFAULT_STYLE_IDS", defaultStyleIds);
   },
 
+  getAcceptRetrieveTelemetry: async () => {
+    return await ipcRendererInvoke("GET_ACCEPT_RETRIEVE_TELEMETRY");
+  },
+
+  setAcceptRetrieveTelemetry: async (acceptRetrieveTelemetry) => {
+    return await ipcRendererInvoke(
+      "SET_ACCEPT_RETRIEVE_TELEMETRY",
+      acceptRetrieveTelemetry
+    );
+  },
+
+  getAcceptTerms: async () => {
+    return await ipcRendererInvoke("GET_ACCEPT_TERMS");
+  },
+
+  setAcceptTerms: async (acceptTerms) => {
+    return await ipcRendererInvoke("SET_ACCEPT_TERMS", acceptTerms);
+  },
+
+  getExperimentalSetting: async () => {
+    return await ipcRendererInvoke("GET_EXPERIMENTAL_SETTING");
+  },
+
+  setExperimentalSetting: async (setting) => {
+    return await ipcRendererInvoke("SET_EXPERIMENTAL_SETTING", setting);
+  },
+
+  getSplitterPosition: async () => {
+    return await ipcRendererInvoke("GET_SPLITTER_POSITION");
+  },
+
+  setSplitterPosition: async (splitterPosition) => {
+    return await ipcRendererInvoke("SET_SPLITTER_POSITION", splitterPosition);
+  },
+
   getDefaultHotkeySettings: async () => {
     return await ipcRendererInvoke("GET_DEFAULT_HOTKEY_SETTINGS");
+  },
+
+  getDefaultToolbarSetting: async () => {
+    return await ipcRendererInvoke("GET_DEFAULT_TOOLBAR_SETTING");
   },
 
   theme: (newData) => {
@@ -206,6 +295,16 @@ const api: Sandbox = {
 
   vuexReady: () => {
     ipcRenderer.invoke("ON_VUEX_READY");
+  },
+
+  getSplitTextWhenPaste: async () => {
+    return await ipcRendererInvoke("GET_SPLIT_TEXT_WHEN_PASTE");
+  },
+  setSplitTextWhenPaste: async (splitTextWhenPaste) => {
+    return await ipcRendererInvoke(
+      "SET_SPLIT_TEXT_WHEN_PASTE",
+      splitTextWhenPaste
+    );
   },
 };
 

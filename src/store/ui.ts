@@ -9,6 +9,7 @@ import {
   UiStoreState,
   VoiceVoxStoreOptions,
 } from "./type";
+import { ActivePointScrollMode, EngineInfo } from "@/type/preload";
 
 export function createUILockAction<S, A extends ActionsBase, K extends keyof A>(
   action: (
@@ -28,14 +29,22 @@ export function createUILockAction<S, A extends ActionsBase, K extends keyof A>(
 
 export const uiStoreState: UiStoreState = {
   uiLockCount: 0,
+  dialogLockCount: 0,
   useGpu: false,
   inheritAudioInfo: true,
+  activePointScrollMode: "OFF",
   isHelpDialogOpen: false,
   isSettingDialogOpen: false,
   isHotkeySettingDialogOpen: false,
+  isToolbarSettingDialogOpen: false,
+  isCharacterOrderDialogOpen: false,
   isDefaultStyleSelectDialogOpen: false,
+  isAcceptRetrieveTelemetryDialogOpen: false,
+  isAcceptTermsDialogOpen: false,
+  isDictionaryManageDialogOpen: false,
   isMaximized: false,
   isPinned: false,
+  isFullscreen: false,
 };
 
 export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
@@ -44,8 +53,14 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       UI_LOCKED(state) {
         return state.uiLockCount > 0;
       },
+      MENUBAR_LOCKED(state) {
+        return state.dialogLockCount > 0;
+      },
       SHOULD_SHOW_PANES(_, getters) {
         return getters.ACTIVE_AUDIO_KEY != undefined;
+      },
+      IS_FULLSCREEN(state) {
+        return state.isFullscreen;
       },
     },
 
@@ -54,7 +69,18 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
         state.uiLockCount++;
       },
       UNLOCK_UI(state) {
-        state.uiLockCount--;
+        if (state.uiLockCount !== 0) {
+          state.uiLockCount--;
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn("UNLOCK_UI is called when state.uiLockCount == 0");
+        }
+      },
+      LOCK_MENUBAR(state) {
+        state.dialogLockCount++;
+      },
+      UNLOCK_MENUBAR(state) {
+        state.dialogLockCount--;
       },
       IS_HELP_DIALOG_OPEN(
         state,
@@ -71,6 +97,18 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       IS_HOTKEY_SETTING_DIALOG_OPEN(state, { isHotkeySettingDialogOpen }) {
         state.isHotkeySettingDialogOpen = isHotkeySettingDialogOpen;
       },
+      IS_TOOLBAR_SETTING_DIALOG_OPEN(
+        state,
+        { isToolbarSettingDialogOpen }: { isToolbarSettingDialogOpen: boolean }
+      ) {
+        state.isToolbarSettingDialogOpen = isToolbarSettingDialogOpen;
+      },
+      IS_CHARACTER_ORDER_DIALOG_OPEN(
+        state,
+        { isCharacterOrderDialogOpen }: { isCharacterOrderDialogOpen: boolean }
+      ) {
+        state.isCharacterOrderDialogOpen = isCharacterOrderDialogOpen;
+      },
       IS_DEFAULT_STYLE_SELECT_DIALOG_OPEN(
         state,
         {
@@ -79,14 +117,43 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       ) {
         state.isDefaultStyleSelectDialogOpen = isDefaultStyleSelectDialogOpen;
       },
+      IS_DICTIONARY_MANAGE_DIALOG_OPEN(
+        state,
+        {
+          isDictionaryManageDialogOpen,
+        }: { isDictionaryManageDialogOpen: boolean }
+      ) {
+        state.isDictionaryManageDialogOpen = isDictionaryManageDialogOpen;
+      },
+      IS_ACCEPT_RETRIEVE_TELEMETRY_DIALOG_OPEN(
+        state,
+        { isAcceptRetrieveTelemetryDialogOpen }
+      ) {
+        state.isAcceptRetrieveTelemetryDialogOpen =
+          isAcceptRetrieveTelemetryDialogOpen;
+      },
+      IS_ACCEPT_TERMS_DIALOG_OPEN(state, { isAcceptTermsDialogOpen }) {
+        state.isAcceptTermsDialogOpen = isAcceptTermsDialogOpen;
+      },
       SET_USE_GPU(state, { useGpu }: { useGpu: boolean }) {
         state.useGpu = useGpu;
+      },
+      SET_ENGINE_INFOS(state, { engineInfos }: { engineInfos: EngineInfo[] }) {
+        state.engineInfos = engineInfos;
       },
       SET_INHERIT_AUDIOINFO(
         state,
         { inheritAudioInfo }: { inheritAudioInfo: boolean }
       ) {
         state.inheritAudioInfo = inheritAudioInfo;
+      },
+      SET_ACTIVE_POINT_SCROLL_MODE(
+        state,
+        {
+          activePointScrollMode,
+        }: { activePointScrollMode: ActivePointScrollMode }
+      ) {
+        state.activePointScrollMode = activePointScrollMode;
       },
       DETECT_UNMAXIMIZED(state) {
         state.isMaximized = false;
@@ -100,6 +167,12 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       DETECT_UNPINNED(state) {
         state.isPinned = false;
       },
+      DETECT_ENTER_FULLSCREEN(state) {
+        state.isFullscreen = true;
+      },
+      DETECT_LEAVE_FULLSCREEN(state) {
+        state.isFullscreen = false;
+      },
     },
 
     actions: {
@@ -108,6 +181,12 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       },
       UNLOCK_UI({ commit }) {
         commit("UNLOCK_UI");
+      },
+      LOCK_MENUBAR({ commit }) {
+        commit("LOCK_MENUBAR");
+      },
+      UNLOCK_MENUBAR({ commit }) {
+        commit("UNLOCK_MENUBAR");
       },
       ASYNC_UI_LOCK: createUILockAction(
         async (_, { callback }: { callback: () => Promise<void> }) => {
@@ -120,8 +199,13 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       ) {
         if (state.isHelpDialogOpen === isHelpDialogOpen) return;
 
-        if (isHelpDialogOpen) commit("LOCK_UI");
-        else commit("UNLOCK_UI");
+        if (isHelpDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
 
         commit("IS_HELP_DIALOG_OPEN", { isHelpDialogOpen });
       },
@@ -131,8 +215,13 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       ) {
         if (state.isSettingDialogOpen === isSettingDialogOpen) return;
 
-        if (isSettingDialogOpen) commit("LOCK_UI");
-        else commit("UNLOCK_UI");
+        if (isSettingDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
 
         commit("IS_SETTING_DIALOG_OPEN", { isSettingDialogOpen });
       },
@@ -143,13 +232,56 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
         if (state.isHotkeySettingDialogOpen === isHotkeySettingDialogOpen)
           return;
 
-        if (isHotkeySettingDialogOpen) commit("LOCK_UI");
-        else commit("UNLOCK_UI");
+        if (isHotkeySettingDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
 
         commit("IS_HOTKEY_SETTING_DIALOG_OPEN", { isHotkeySettingDialogOpen });
       },
+      IS_TOOLBAR_SETTING_DIALOG_OPEN(
+        { state, commit },
+        { isToolbarSettingDialogOpen }: { isToolbarSettingDialogOpen: boolean }
+      ) {
+        if (state.isToolbarSettingDialogOpen === isToolbarSettingDialogOpen)
+          return;
+
+        if (isToolbarSettingDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
+
+        commit("IS_TOOLBAR_SETTING_DIALOG_OPEN", {
+          isToolbarSettingDialogOpen,
+        });
+      },
       ON_VUEX_READY() {
         window.electron.vuexReady();
+      },
+      async IS_CHARACTER_ORDER_DIALOG_OPEN(
+        { state, commit },
+        { isCharacterOrderDialogOpen }
+      ) {
+        if (state.isCharacterOrderDialogOpen === isCharacterOrderDialogOpen)
+          return;
+
+        if (isCharacterOrderDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
+
+        commit("IS_CHARACTER_ORDER_DIALOG_OPEN", {
+          isCharacterOrderDialogOpen,
+        });
       },
       async IS_DEFAULT_STYLE_SELECT_DIALOG_OPEN(
         { state, commit },
@@ -161,11 +293,65 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
         )
           return;
 
-        if (isDefaultStyleSelectDialogOpen) commit("LOCK_UI");
-        else commit("UNLOCK_UI");
+        if (isDefaultStyleSelectDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
 
         commit("IS_DEFAULT_STYLE_SELECT_DIALOG_OPEN", {
           isDefaultStyleSelectDialogOpen,
+        });
+      },
+      async IS_DICTIONARY_MANAGE_DIALOG_OPEN(
+        { state, commit },
+        { isDictionaryManageDialogOpen }
+      ) {
+        if (state.isDictionaryManageDialogOpen === isDictionaryManageDialogOpen)
+          return;
+
+        if (isDictionaryManageDialogOpen) {
+          commit("LOCK_UI");
+          commit("LOCK_MENUBAR");
+        } else {
+          commit("UNLOCK_UI");
+          commit("UNLOCK_MENUBAR");
+        }
+
+        commit("IS_DICTIONARY_MANAGE_DIALOG_OPEN", {
+          isDictionaryManageDialogOpen,
+        });
+      },
+      async IS_ACCEPT_RETRIEVE_TELEMETRY_DIALOG_OPEN(
+        { state, commit },
+        { isAcceptRetrieveTelemetryDialogOpen }
+      ) {
+        if (
+          state.isAcceptRetrieveTelemetryDialogOpen ===
+          isAcceptRetrieveTelemetryDialogOpen
+        )
+          return;
+
+        if (isAcceptRetrieveTelemetryDialogOpen) commit("LOCK_UI");
+        else commit("UNLOCK_UI");
+
+        commit("IS_ACCEPT_RETRIEVE_TELEMETRY_DIALOG_OPEN", {
+          isAcceptRetrieveTelemetryDialogOpen,
+        });
+      },
+      async IS_ACCEPT_TERMS_DIALOG_OPEN(
+        { state, commit },
+        { isAcceptTermsDialogOpen }
+      ) {
+        if (state.isAcceptTerms_DialogOpen === isAcceptTermsDialogOpen) return;
+
+        if (isAcceptTermsDialogOpen) commit("LOCK_UI");
+        else commit("UNLOCK_UI");
+
+        commit("IS_ACCEPT_TERMS_DIALOG_OPEN", {
+          isAcceptTermsDialogOpen,
         });
       },
       async GET_USE_GPU({ commit }) {
@@ -176,6 +362,11 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       async SET_USE_GPU({ commit }, { useGpu }: { useGpu: boolean }) {
         commit("SET_USE_GPU", {
           useGpu: await window.electron.useGpu(useGpu),
+        });
+      },
+      async GET_ENGINE_INFOS({ commit }) {
+        commit("SET_ENGINE_INFOS", {
+          engineInfos: await window.electron.engineInfos(),
         });
       },
       async GET_INHERIT_AUDIOINFO({ commit }) {
@@ -193,6 +384,23 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
           ),
         });
       },
+      async GET_ACTIVE_POINT_SCROLL_MODE({ commit }) {
+        commit("SET_ACTIVE_POINT_SCROLL_MODE", {
+          activePointScrollMode: await window.electron.activePointScrollMode(),
+        });
+      },
+      async SET_ACTIVE_POINT_SCROLL_MODE(
+        { commit },
+        {
+          activePointScrollMode,
+        }: { activePointScrollMode: ActivePointScrollMode }
+      ) {
+        commit("SET_ACTIVE_POINT_SCROLL_MODE", {
+          activePointScrollMode: await window.electron.activePointScrollMode(
+            activePointScrollMode
+          ),
+        });
+      },
       async DETECT_UNMAXIMIZED({ commit }) {
         commit("DETECT_UNMAXIMIZED");
       },
@@ -205,14 +413,22 @@ export const uiStore: VoiceVoxStoreOptions<UiGetters, UiActions, UiMutations> =
       async DETECT_UNPINNED({ commit }) {
         commit("DETECT_UNPINNED");
       },
+      async DETECT_ENTER_FULLSCREEN({ commit }) {
+        commit("DETECT_ENTER_FULLSCREEN");
+      },
+      async DETECT_LEAVE_FULLSCREEN({ commit }) {
+        commit("DETECT_LEAVE_FULLSCREEN");
+      },
       async CHECK_EDITED_AND_NOT_SAVE({ getters }) {
         if (getters.IS_EDITED) {
-          const result: number = await window.electron.showInfoDialog({
+          const result: number = await window.electron.showQuestionDialog({
+            type: "info",
             title: "警告",
             message:
               "プロジェクトの変更が保存されていません。\n" +
               "変更を破棄してもよろしいですか？",
             buttons: ["破棄", "キャンセル"],
+            cancelId: 1,
           });
           if (result == 1) {
             return;

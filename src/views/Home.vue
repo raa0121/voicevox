@@ -5,11 +5,20 @@
     <header-bar />
 
     <q-page-container>
-      <q-page class="main-row-panes bg-background">
-        <div v-if="engineState === 'STARTING'" class="waiting-engine">
+      <q-page class="main-row-panes">
+        <div
+          v-if="!isCompletedInitialStartup || engineState === 'STARTING'"
+          class="waiting-engine"
+        >
           <div>
             <q-spinner color="primary" size="2.5rem" />
-            <div>エンジン起動中・・・</div>
+            <div class="q-mt-xs">
+              {{
+                engineState === "STARTING"
+                  ? "エンジン起動中・・・"
+                  : "データ準備中・・・"
+              }}
+            </div>
           </div>
         </div>
         <q-splitter
@@ -22,7 +31,8 @@
           class="full-width"
           before-class="overflow-hidden"
           :disable="!shouldShowPanes"
-          v-model="audioDetailPaneHeight"
+          :model-value="audioDetailPaneHeight"
+          @update:model-value="updateAudioDetailPane"
         >
           <template #before>
             <q-splitter
@@ -31,7 +41,8 @@
               :separator-style="{ width: shouldShowPanes ? '3px' : 0 }"
               before-class="overflow-hidden"
               :disable="!shouldShowPanes"
-              v-model="portraitPaneWidth"
+              :model-value="portraitPaneWidth"
+              @update:model-value="updatePortraitPane"
             >
               <template #before>
                 <character-portrait />
@@ -45,7 +56,8 @@
                   :separator-style="{ width: shouldShowPanes ? '3px' : 0 }"
                   class="full-width overflow-hidden"
                   :disable="!shouldShowPanes"
-                  v-model="audioInfoPaneWidth"
+                  :model-value="audioInfoPaneWidth"
+                  @update:model-value="updateAudioInfoPane"
                 >
                   <template #before>
                     <div
@@ -59,15 +71,24 @@
                         loadDraggedFile($event);
                       "
                     >
-                      <div class="audio-cells">
-                        <audio-cell
-                          v-for="audioKey in audioKeys"
-                          :key="audioKey"
-                          :audioKey="audioKey"
-                          :ref="addAudioCellRef"
-                          @focusCell="focusCell"
-                        />
-                      </div>
+                      <draggable
+                        class="audio-cells"
+                        :modelValue="audioKeys"
+                        @update:modelValue="updateAudioKeys"
+                        :itemKey="itemKey"
+                        ghost-class="ghost"
+                        filter="input"
+                        :preventOnFilter="false"
+                      >
+                        <template v-slot:item="{ element }">
+                          <audio-cell
+                            class="draggable-cursor"
+                            :audioKey="element"
+                            :ref="addAudioCellRef"
+                            @focusCell="focusCell"
+                          />
+                        </template>
+                      </draggable>
                       <div class="add-button-wrapper">
                         <q-btn
                           fab
@@ -108,11 +129,22 @@
   <help-dialog v-model="isHelpDialogOpenComputed" />
   <setting-dialog v-model="isSettingDialogOpenComputed" />
   <hotkey-setting-dialog v-model="isHotkeySettingDialogOpenComputed" />
+  <header-bar-custom-dialog v-model="isToolbarSettingDialogOpenComputed" />
+  <character-order-dialog
+    v-if="characterInfos"
+    :characterInfos="characterInfos"
+    v-model="isCharacterOrderDialogOpenComputed"
+  />
   <default-style-select-dialog
     v-if="characterInfos"
     :characterInfos="characterInfos"
     v-model="isDefaultStyleSelectDialogOpenComputed"
   />
+  <dictionary-manage-dialog v-model="isDictionaryManageDialogOpenComputed" />
+  <accept-retrieve-telemetry-dialog
+    v-model="isAcceptRetrieveTelemetryDialogOpenComputed"
+  />
+  <accept-terms-dialog v-model="isAcceptTermsDialogOpenComputed" />
 </template>
 
 <script lang="ts">
@@ -125,6 +157,7 @@ import {
   watch,
 } from "vue";
 import { useStore } from "@/store";
+import draggable from "vuedraggable";
 import HeaderBar from "@/components/HeaderBar.vue";
 import AudioCell from "@/components/AudioCell.vue";
 import AudioDetail from "@/components/AudioDetail.vue";
@@ -133,18 +166,28 @@ import MenuBar from "@/components/MenuBar.vue";
 import HelpDialog from "@/components/HelpDialog.vue";
 import SettingDialog from "@/components/SettingDialog.vue";
 import HotkeySettingDialog from "@/components/HotkeySettingDialog.vue";
+import HeaderBarCustomDialog from "@/components/HeaderBarCustomDialog.vue";
 import CharacterPortrait from "@/components/CharacterPortrait.vue";
 import DefaultStyleSelectDialog from "@/components/DefaultStyleSelectDialog.vue";
+import CharacterOrderDialog from "@/components/CharacterOrderDialog.vue";
+import AcceptRetrieveTelemetryDialog from "@/components/AcceptRetrieveTelemetryDialog.vue";
+import AcceptTermsDialog from "@/components/AcceptTermsDialog.vue";
+import DictionaryManageDialog from "@/components/DictionaryManageDialog.vue";
 import { AudioItem } from "@/store/type";
-import { QResizeObserver } from "quasar";
+import { QResizeObserver, useQuasar } from "quasar";
 import path from "path";
-import { HotkeyAction, HotkeyReturnType } from "@/type/preload";
+import {
+  HotkeyAction,
+  HotkeyReturnType,
+  SplitterPosition,
+} from "@/type/preload";
 import { parseCombo, setHotkeyFunctions } from "@/store/setting";
 
 export default defineComponent({
   name: "Home",
 
   components: {
+    draggable,
     MenuBar,
     HeaderBar,
     AudioCell,
@@ -153,12 +196,18 @@ export default defineComponent({
     HelpDialog,
     SettingDialog,
     HotkeySettingDialog,
+    HeaderBarCustomDialog,
     CharacterPortrait,
     DefaultStyleSelectDialog,
+    CharacterOrderDialog,
+    AcceptRetrieveTelemetryDialog,
+    AcceptTermsDialog,
+    DictionaryManageDialog,
   },
 
   setup() {
     const store = useStore();
+    const $q = useQuasar();
 
     const audioItems = computed(() => store.state.audioItems);
     const audioKeys = computed(() => store.state.audioKeys);
@@ -262,6 +311,38 @@ export default defineComponent({
       }
     };
 
+    const splitterPosition = computed<SplitterPosition>(
+      () => store.state.splitterPosition
+    );
+
+    const updateSplitterPosition = async (
+      propertyName: keyof SplitterPosition,
+      newValue: number
+    ) => {
+      const newSplitterPosition = {
+        ...splitterPosition.value,
+        [propertyName]: newValue,
+      };
+      store.dispatch("SET_SPLITTER_POSITION", {
+        splitterPosition: newSplitterPosition,
+      });
+    };
+
+    const updatePortraitPane = async (width: number) => {
+      portraitPaneWidth.value = width;
+      await updateSplitterPosition("portraitPaneWidth", width);
+    };
+
+    const updateAudioInfoPane = async (width: number) => {
+      audioInfoPaneWidth.value = width;
+      await updateSplitterPosition("audioInfoPaneWidth", width);
+    };
+
+    const updateAudioDetailPane = async (height: number) => {
+      audioDetailPaneHeight.value = height;
+      await updateSplitterPosition("audioDetailPaneHeight", height);
+    };
+
     // component
     let audioCellRefs: Record<string, typeof AudioCell> = {};
     const addAudioCellRef = (audioCellRef: typeof AudioCell) => {
@@ -275,6 +356,11 @@ export default defineComponent({
 
     const resizeObserverRef = ref<QResizeObserver>();
 
+    // DaD
+    const updateAudioKeys = (audioKeys: string[]) =>
+      store.dispatch("COMMAND_SET_AUDIO_KEYS", { audioKeys });
+    const itemKey = (key: string) => key;
+
     // セルを追加
     const activeAudioKey = computed<string | undefined>(
       () => store.getters.ACTIVE_AUDIO_KEY
@@ -282,8 +368,10 @@ export default defineComponent({
     const addAudioItem = async () => {
       const prevAudioKey = activeAudioKey.value;
       let styleId: number | undefined = undefined;
+      let presetKey: string | undefined = undefined;
       if (prevAudioKey !== undefined) {
         styleId = store.state.audioItems[prevAudioKey].styleId;
+        presetKey = store.state.audioItems[prevAudioKey].presetKey;
       }
       let audioItem: AudioItem;
       let baseAudioItem: AudioItem | undefined = undefined;
@@ -296,6 +384,7 @@ export default defineComponent({
       //パラメータ引き継ぎがOFFの場合、baseAudioItemがundefinedになっているのでパラメータ引き継ぎは行われない
       audioItem = await store.dispatch("GENERATE_AUDIO_ITEM", {
         styleId,
+        presetKey,
         baseAudioItem,
       });
 
@@ -314,14 +403,36 @@ export default defineComponent({
       if (val === old) return;
 
       if (val) {
-        portraitPaneWidth.value = DEFAULT_PORTRAIT_PANE_WIDTH;
-        audioInfoPaneWidth.value = MIN_AUDIO_INFO_PANE_WIDTH;
+        const clamp = (value: number, min: number, max: number) =>
+          Math.max(Math.min(value, max), min);
+
+        // 設定ファイルを書き換えれば異常な値が入り得るのですべてclampしておく
+        portraitPaneWidth.value = clamp(
+          splitterPosition.value.portraitPaneWidth ??
+            DEFAULT_PORTRAIT_PANE_WIDTH,
+          MIN_PORTRAIT_PANE_WIDTH,
+          MAX_PORTRAIT_PANE_WIDTH
+        );
+
+        audioInfoPaneWidth.value = clamp(
+          splitterPosition.value.audioInfoPaneWidth ??
+            MIN_AUDIO_INFO_PANE_WIDTH,
+          MIN_AUDIO_INFO_PANE_WIDTH,
+          MAX_AUDIO_INFO_PANE_WIDTH
+        );
         audioInfoPaneMinWidth.value = MIN_AUDIO_INFO_PANE_WIDTH;
         audioInfoPaneMaxWidth.value = MAX_AUDIO_INFO_PANE_WIDTH;
-        audioDetailPaneHeight.value = MIN_AUDIO_DETAIL_PANE_HEIGHT;
+
         audioDetailPaneMinHeight.value = MIN_AUDIO_DETAIL_PANE_HEIGHT;
         changeAudioDetailPaneMaxHeight(
           resizeObserverRef.value?.$el.parentElement.clientHeight
+        );
+
+        audioDetailPaneHeight.value = clamp(
+          splitterPosition.value.audioDetailPaneHeight ??
+            MIN_AUDIO_DETAIL_PANE_HEIGHT,
+          audioDetailPaneMinHeight.value,
+          audioDetailPaneMaxHeight.value
         );
       } else {
         portraitPaneWidth.value = 0;
@@ -339,6 +450,7 @@ export default defineComponent({
       audioCellRefs[audioKey].focusTextField();
     };
 
+    // Electronのデフォルトのundo/redoを無効化
     const disableDefaultUndoRedo = (event: KeyboardEvent) => {
       // ctrl+z, ctrl+shift+z, ctrl+y
       if (
@@ -349,15 +461,32 @@ export default defineComponent({
       }
     };
 
-    // プロジェクトを初期化
+    // ソフトウェアを初期化
+    const isCompletedInitialStartup = ref(false);
     onMounted(async () => {
-      await Promise.all([
-        store.dispatch("LOAD_CHARACTER"),
-        store.dispatch("LOAD_DEFAULT_STYLE_IDS"),
-      ]);
-      if (await store.dispatch("IS_UNSET_DEFAULT_STYLE_IDS")) {
-        isDefaultStyleSelectDialogOpenComputed.value = true;
+      await store.dispatch("GET_ENGINE_INFOS");
+
+      await store.dispatch("START_WAITING_ENGINE");
+      await store.dispatch("LOAD_CHARACTER");
+      await store.dispatch("LOAD_USER_CHARACTER_ORDER");
+      await store.dispatch("LOAD_DEFAULT_STYLE_IDS");
+
+      // 新キャラが追加されている場合はキャラ並び替えダイアログを表示
+      const newCharacters = await store.dispatch("GET_NEW_CHARACTERS");
+      isCharacterOrderDialogOpenComputed.value = newCharacters.length > 0;
+
+      // スタイルが複数あって未選択なキャラがいる場合はデフォルトスタイル選択ダイアログを表示
+      let isUnsetDefaultStyleIds = false;
+      if (characterInfos.value == undefined) throw new Error();
+      for (const info of characterInfos.value) {
+        isUnsetDefaultStyleIds ||=
+          info.metas.styles.length > 1 &&
+          (await store.dispatch("IS_UNSET_DEFAULT_STYLE_ID", {
+            speakerUuid: info.metas.speakerUuid,
+          }));
       }
+      isDefaultStyleSelectDialogOpenComputed.value = isUnsetDefaultStyleIds;
+
       const audioItem: AudioItem = await store.dispatch(
         "GENERATE_AUDIO_ITEM",
         {}
@@ -372,6 +501,15 @@ export default defineComponent({
       hotkeyActionsNative.forEach((item) => {
         document.addEventListener("keyup", item);
       });
+
+      isAcceptRetrieveTelemetryDialogOpenComputed.value =
+        store.state.acceptRetrieveTelemetry === "Unconfirmed";
+
+      isAcceptTermsDialogOpenComputed.value =
+        process.env.NODE_ENV == "production" &&
+        store.state.acceptTerms !== "Accepted";
+
+      isCompletedInitialStartup.value = true;
     });
 
     // エンジン待機
@@ -400,13 +538,66 @@ export default defineComponent({
         }),
     });
 
-    // デフォルトスタイル選択
+    // ツールバーのカスタム設定
+    const isToolbarSettingDialogOpenComputed = computed({
+      get: () => store.state.isToolbarSettingDialogOpen,
+      set: (val) =>
+        store.dispatch("IS_TOOLBAR_SETTING_DIALOG_OPEN", {
+          isToolbarSettingDialogOpen: val,
+        }),
+    });
+
+    // 利用規約表示
+    const isAcceptTermsDialogOpenComputed = computed({
+      get: () => store.state.isAcceptTermsDialogOpen,
+      set: (val) =>
+        store.dispatch("IS_ACCEPT_TERMS_DIALOG_OPEN", {
+          isAcceptTermsDialogOpen: val,
+        }),
+    });
+
+    // キャラクター並び替え
     const characterInfos = computed(() => store.state.characterInfos);
+    const isCharacterOrderDialogOpenComputed = computed({
+      get: () =>
+        !store.state.isAcceptTermsDialogOpen &&
+        store.state.isCharacterOrderDialogOpen,
+      set: (val) =>
+        store.dispatch("IS_CHARACTER_ORDER_DIALOG_OPEN", {
+          isCharacterOrderDialogOpen: val,
+        }),
+    });
+
+    // デフォルトスタイル選択
     const isDefaultStyleSelectDialogOpenComputed = computed({
-      get: () => store.state.isDefaultStyleSelectDialogOpen,
+      get: () =>
+        !store.state.isAcceptTermsDialogOpen &&
+        !store.state.isCharacterOrderDialogOpen &&
+        store.state.isDefaultStyleSelectDialogOpen,
       set: (val) =>
         store.dispatch("IS_DEFAULT_STYLE_SELECT_DIALOG_OPEN", {
           isDefaultStyleSelectDialogOpen: val,
+        }),
+    });
+
+    // 読み方＆アクセント辞書
+    const isDictionaryManageDialogOpenComputed = computed({
+      get: () => store.state.isDictionaryManageDialogOpen,
+      set: (val) =>
+        store.dispatch("IS_DICTIONARY_MANAGE_DIALOG_OPEN", {
+          isDictionaryManageDialogOpen: val,
+        }),
+    });
+
+    const isAcceptRetrieveTelemetryDialogOpenComputed = computed({
+      get: () =>
+        !store.state.isAcceptTermsDialogOpen &&
+        !store.state.isCharacterOrderDialogOpen &&
+        !store.state.isDefaultStyleSelectDialogOpen &&
+        store.state.isAcceptRetrieveTelemetryDialogOpen,
+      set: (val) =>
+        store.dispatch("IS_ACCEPT_RETRIEVE_TELEMETRY_DIALOG_OPEN", {
+          isAcceptRetrieveTelemetryDialogOpen: val,
         }),
     });
 
@@ -423,10 +614,15 @@ export default defineComponent({
           store.dispatch("LOAD_PROJECT_FILE", { filePath: file.path });
           break;
         default:
-          store.dispatch("SHOW_WARNING_DIALOG", {
+          $q.dialog({
             title: "対応していないファイルです",
             message:
               "テキストファイル (.txt) とVOICEVOXプロジェクトファイル (.vvproj) に対応しています。",
+            ok: {
+              label: "閉じる",
+              flat: true,
+              textColor: "display",
+            },
           });
       }
     };
@@ -437,6 +633,8 @@ export default defineComponent({
       uiLocked,
       addAudioCellRef,
       activeAudioKey,
+      itemKey,
+      updateAudioKeys,
       addAudioItem,
       shouldShowPanes,
       focusCell,
@@ -451,12 +649,21 @@ export default defineComponent({
       audioDetailPaneHeight,
       audioDetailPaneMinHeight,
       audioDetailPaneMaxHeight,
+      updatePortraitPane,
+      updateAudioInfoPane,
+      updateAudioDetailPane,
+      isCompletedInitialStartup,
       engineState,
       isHelpDialogOpenComputed,
       isSettingDialogOpenComputed,
       isHotkeySettingDialogOpenComputed,
+      isToolbarSettingDialogOpenComputed,
       characterInfos,
+      isCharacterOrderDialogOpenComputed,
       isDefaultStyleSelectDialogOpenComputed,
+      isDictionaryManageDialogOpenComputed,
+      isAcceptRetrieveTelemetryDialogOpenComputed,
+      isAcceptTermsDialogOpenComputed,
       dragEventCounter,
       loadDraggedFile,
     };
@@ -464,33 +671,16 @@ export default defineComponent({
 });
 </script>
 
-<style lang="scss">
-@use '@/styles' as global;
-body {
-  user-select: none;
-  border-left: solid #{global.$window-border-width} #{global.$primary};
-  border-right: solid #{global.$window-border-width} #{global.$primary};
-  border-bottom: solid #{global.$window-border-width} #{global.$primary};
-}
-
-.relative-absolute-wrapper {
-  position: relative;
-  > div {
-    position: absolute;
-    inset: 0;
-  }
-}
-</style>
-
-<style lang="scss">
-@use '@/styles' as global;
+<style scoped lang="scss">
+@use '@/styles/variables' as vars;
+@use '@/styles/colors' as colors;
 
 .q-header {
-  height: global.$header-height;
+  height: vars.$header-height;
 }
 
 .waiting-engine {
-  background-color: var(--color-background);
+  background-color: rgba(colors.$display-dark-rgb, 0.15);
   position: absolute;
   inset: 0;
   z-index: 10;
@@ -500,8 +690,8 @@ body {
   justify-content: center;
 
   > div {
-    color: var(--color-display-dark);
-    background: var(--color-background-light);
+    color: colors.$display-dark;
+    background: colors.$background-light;
     border-radius: 6px;
     padding: 14px;
   }
@@ -516,10 +706,14 @@ body {
 
   .q-splitter--horizontal {
     height: calc(
-      100vh - #{global.$menubar-height + global.$header-height +
-        global.$window-border-width}
+      100vh - #{vars.$menubar-height + vars.$header-height +
+        vars.$window-border-width}
     );
   }
+}
+
+.ghost {
+  background-color: rgba(colors.$display-dark-rgb, 0.15);
 }
 
 .audio-cell-pane {
@@ -531,7 +725,7 @@ body {
   height: 100%;
 
   &.is-dragging {
-    background-color: var(--color-background);
+    background-color: rgba(colors.$display-dark-rgb, 0.15);
   }
 
   .audio-cells {
@@ -546,6 +740,11 @@ body {
 
     padding-bottom: 70px;
   }
+
+  .draggable-cursor {
+    cursor: grab;
+  }
+
   .add-button-wrapper {
     position: absolute;
     right: 0px;

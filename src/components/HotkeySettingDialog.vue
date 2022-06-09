@@ -1,10 +1,9 @@
 <template>
   <q-dialog
     maximized
-    seamless
     transition-show="jump-up"
     transition-hide="jump-down"
-    class="hotkey-setting-dialog"
+    class="hotkey-setting-dialog transparent-backdrop"
     v-model="hotkeySettingDialogOpenComputed"
   >
     <q-layout container view="hHh Lpr lff" class="bg-background">
@@ -83,6 +82,11 @@
                     :label="
                       getHotkeyText(props.row.action, props.row.combination)
                         .split(' ')
+                        .map((hotkeyText) => {
+                          // Mac の Meta キーは Cmd キーであるため、Meta の表示名を Cmd に置換する
+                          // Windows PC では Meta キーは Windows キーだが、使用頻度低と考えられるため暫定的に Mac 対応のみを考慮している
+                          return hotkeyText === 'Meta' ? 'Cmd' : hotkeyText;
+                        })
                         .join(' + ')
                     "
                     @click="openHotkeyDialog(props.row.action)"
@@ -122,8 +126,12 @@
       <q-card-section align="center">
         <template v-for="(hotkey, index) in lastRecord.split(' ')" :key="index">
           <span v-if="index !== 0"> + </span>
+          <!--
+          Mac の Meta キーは Cmd キーであるため、Meta の表示名を Cmd に置換する
+          Windows PC では Meta キーは Windows キーだが、使用頻度低と考えられるため暫定的に Mac 対応のみを考慮している
+          -->
           <q-chip :ripple="false" color="setting-item">
-            {{ hotkey }}
+            {{ hotkey === "Meta" ? "Cmd" : hotkey }}
           </q-chip>
         </template>
         <span v-if="lastRecord !== '' && confirmBtnEnabled"> +</span>
@@ -315,7 +323,7 @@ export default defineComponent({
     const confirmBtnEnabled = computed(() => {
       return (
         lastRecord.value == "" ||
-        ["Ctrl", "Shift", "Alt"].indexOf(
+        ["Ctrl", "Shift", "Alt", "Meta"].indexOf(
           lastRecord.value.split(" ")[lastRecord.value.split(" ").length - 1]
         ) > -1
       );
@@ -374,19 +382,19 @@ export default defineComponent({
 });
 </script>
 
-<style lang="scss" scoped>
-@use '@/styles' as global;
-@import "~quasar/src/css/variables";
+<style scoped lang="scss">
+@use '@/styles/variables' as vars;
+@use '@/styles/colors' as colors;
 
 .search-box {
   width: 200px;
 }
 
 .hotkey-table {
-  width: calc(100vw - #{global.$window-border-width * 2});
+  width: calc(100vw - #{vars.$window-border-width * 2});
   height: calc(
-    100vh - #{global.$menubar-height + global.$header-height +
-      global.$window-border-width}
+    100vh - #{vars.$menubar-height + vars.$header-height +
+      vars.$window-border-width}
   );
 
   > :deep(.scroll) {
@@ -401,7 +409,7 @@ export default defineComponent({
     }
     &:hover td button:last-child {
       display: inline-flex;
-      color: var(--color-display);
+      color: colors.$display;
       opacity: 0.5;
       &:hover {
         opacity: 1;
@@ -413,7 +421,7 @@ export default defineComponent({
     position: sticky;
     top: 0;
     font-weight: bold;
-    background-color: var(--color-setting-item);
+    background-color: colors.$setting-item;
     z-index: 1;
   }
 

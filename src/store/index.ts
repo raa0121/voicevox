@@ -14,11 +14,19 @@ import {
   VoiceVoxStoreOptions,
 } from "./type";
 import { commandStoreState, commandStore } from "./command";
-import { audioStoreState, audioStore, audioCommandStore } from "./audio";
+import {
+  audioStoreState,
+  audioStore,
+  audioCommandStore,
+  audioCommandStoreState,
+} from "./audio";
 import { projectStoreState, projectStore } from "./project";
 import { uiStoreState, uiStore } from "./ui";
 import { settingStoreState, settingStore } from "./setting";
+import { presetStoreState, presetStore } from "./preset";
+import { dictionaryStoreState, dictionaryStore } from "./dictionary";
 import { proxyStore, proxyStoreState } from "./proxy";
+import { DefaultStyleId } from "@/type/preload";
 
 const isDevelopment = process.env.NODE_ENV == "development";
 
@@ -28,6 +36,7 @@ export const storeKey: InjectionKey<
 
 export const indexStoreState: IndexStoreState = {
   defaultStyleIds: [],
+  userCharacterOrder: [],
 };
 
 export const indexStore: VoiceVoxStoreOptions<
@@ -63,6 +72,9 @@ export const indexStore: VoiceVoxStoreOptions<
         }
       }
     },
+    SET_USER_CHARACTER_ORDER(state, { userCharacterOrder }) {
+      state.userCharacterOrder = userCharacterOrder;
+    },
   },
   actions: {
     async GET_HOW_TO_USE_TEXT() {
@@ -80,11 +92,14 @@ export const indexStore: VoiceVoxStoreOptions<
     async GET_OSS_COMMUNITY_INFOS() {
       return await window.electron.getOssCommunityInfos();
     },
-    async SHOW_WARNING_DIALOG(
-      _,
-      { title, message }: { title: string; message: string }
-    ) {
-      return await window.electron.showWarningDialog({ title, message });
+    async GET_PRIVACY_POLICY_TEXT() {
+      return await window.electron.getPrivacyPolicyText();
+    },
+    async GET_CONTACT_TEXT() {
+      return await window.electron.getContactText();
+    },
+    async GET_Q_AND_A_TEXT() {
+      return await window.electron.getQAndAText();
     },
     LOG_ERROR(_, ...params: unknown[]) {
       window.electron.logError(...params);
@@ -92,11 +107,50 @@ export const indexStore: VoiceVoxStoreOptions<
     LOG_INFO(_, ...params: unknown[]) {
       window.electron.logInfo(...params);
     },
-    async IS_UNSET_DEFAULT_STYLE_IDS() {
-      return await window.electron.isUnsetDefaultStyleIds();
+    async LOAD_USER_CHARACTER_ORDER({ commit }) {
+      const userCharacterOrder = await window.electron.getUserCharacterOrder();
+      commit("SET_USER_CHARACTER_ORDER", { userCharacterOrder });
     },
-    async LOAD_DEFAULT_STYLE_IDS({ commit }) {
-      const defaultStyleIds = await window.electron.getDefaultStyleIds();
+    async SET_USER_CHARACTER_ORDER({ commit }, userCharacterOrder) {
+      commit("SET_USER_CHARACTER_ORDER", { userCharacterOrder });
+      await window.electron.setUserCharacterOrder(userCharacterOrder);
+    },
+    GET_NEW_CHARACTERS({ state }) {
+      if (!state.characterInfos) throw new Error("characterInfos is undefined");
+
+      // キャラクター表示順序に含まれていなければ新規キャラとみなす
+      const allSpeakerUuid = state.characterInfos.map(
+        (characterInfo) => characterInfo.metas.speakerUuid
+      );
+      const newSpeakerUuid = allSpeakerUuid.filter(
+        (speakerUuid) => !state.userCharacterOrder.includes(speakerUuid)
+      );
+      return newSpeakerUuid;
+    },
+    async IS_UNSET_DEFAULT_STYLE_ID(_, { speakerUuid }) {
+      return await window.electron.isUnsetDefaultStyleId(speakerUuid);
+    },
+    async LOAD_DEFAULT_STYLE_IDS({ commit, state }) {
+      let defaultStyleIds = await window.electron.getDefaultStyleIds();
+
+      if (!state.characterInfos) throw new Error("characterInfos is undefined");
+
+      // デフォルトスタイルが設定されていない場合は0をセットする
+      // FIXME: 保存しているものとstateのものが異なってしまうので良くない。デフォルトスタイルが未設定の場合はAudioCellsを表示しないようにすべき
+      const unsetCharacterInfos = state.characterInfos.filter(
+        (characterInfo) =>
+          !defaultStyleIds.some(
+            (styleId) => styleId.speakerUuid == characterInfo.metas.speakerUuid
+          )
+      );
+      defaultStyleIds = [
+        ...defaultStyleIds,
+        ...unsetCharacterInfos.map<DefaultStyleId>((info) => ({
+          speakerUuid: info.metas.speakerUuid,
+          defaultStyleId: info.metas.styles[0].styleId,
+        })),
+      ];
+
       commit("SET_DEFAULT_STYLE_IDS", { defaultStyleIds });
     },
     async SET_DEFAULT_STYLE_IDS({ commit }, defaultStyleIds) {
@@ -106,14 +160,22 @@ export const indexStore: VoiceVoxStoreOptions<
     async INIT_VUEX({ dispatch }) {
       const promises = [];
 
-      promises.push(dispatch("GET_USE_GPU", undefined));
+      promises.push(dispatch("GET_USE_GPU"));
+      promises.push(dispatch("GET_PRESET_CONFIG"));
       promises.push(dispatch("GET_INHERIT_AUDIOINFO"));
+      promises.push(dispatch("GET_ACTIVE_POINT_SCROLL_MODE"));
       promises.push(dispatch("GET_SAVING_SETTING"));
       promises.push(dispatch("GET_HOTKEY_SETTINGS"));
+      promises.push(dispatch("GET_TOOLBAR_SETTING"));
       promises.push(dispatch("GET_THEME_SETTING"));
+      promises.push(dispatch("GET_ACCEPT_RETRIEVE_TELEMETRY"));
+      promises.push(dispatch("GET_ACCEPT_TERMS"));
+      promises.push(dispatch("GET_EXPERIMENTAL_SETTING"));
+      promises.push(dispatch("INIT_SPLIT_TEXT_WHEN_PASTE"));
+      promises.push(dispatch("GET_SPLITTER_POSITION"));
 
-      Promise.all(promises).then(() => {
-        dispatch("ON_VUEX_READY", undefined);
+      await Promise.all(promises).then(() => {
+        dispatch("ON_VUEX_READY");
       });
     },
   },
@@ -126,8 +188,10 @@ export const store = createStore<State, AllGetters, AllActions, AllMutations>({
     ...commandStoreState,
     ...projectStoreState,
     ...settingStoreState,
-    ...audioCommandStore,
+    ...audioCommandStoreState,
     ...indexStoreState,
+    ...presetStoreState,
+    ...dictionaryStoreState,
     ...proxyStoreState,
   },
 
@@ -137,6 +201,8 @@ export const store = createStore<State, AllGetters, AllActions, AllMutations>({
     ...commandStore.getters,
     ...projectStore.getters,
     ...settingStore.getters,
+    ...presetStore.getters,
+    ...dictionaryStore.getters,
     ...audioCommandStore.getters,
     ...indexStore.getters,
     ...proxyStore.getters,
@@ -149,6 +215,8 @@ export const store = createStore<State, AllGetters, AllActions, AllMutations>({
     ...projectStore.mutations,
     ...settingStore.mutations,
     ...audioCommandStore.mutations,
+    ...presetStore.mutations,
+    ...dictionaryStore.mutations,
     ...indexStore.mutations,
     ...proxyStore.mutations,
   },
@@ -160,6 +228,8 @@ export const store = createStore<State, AllGetters, AllActions, AllMutations>({
     ...projectStore.actions,
     ...settingStore.actions,
     ...audioCommandStore.actions,
+    ...presetStore.actions,
+    ...dictionaryStore.actions,
     ...indexStore.actions,
     ...proxyStore.actions,
   },
