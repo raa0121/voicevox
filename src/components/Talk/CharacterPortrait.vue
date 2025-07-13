@@ -4,7 +4,9 @@
     <span v-if="isMultipleEngine" class="character-engine-name">{{
       engineName
     }}</span>
-    <img :src="portraitPath" class="character-portrait" :alt="characterName" />
+    <div ref="canvasContainer" class="canvas-container">
+      <canvas ref="canvas"></canvas>
+    </div>
     <div v-if="isInitializingSpeaker" class="loading">
       <QSpinner color="primary" size="5rem" :thickness="4" />
     </div>
@@ -12,11 +14,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { ref, watch, computed, onUnmounted, onMounted } from "vue";
+import * as PIXI from "pixi.js";
 import { useStore } from "@/store";
+import { useMounted } from "@/composables/useMounted";
 import { AudioKey } from "@/type/preload";
 import { formatCharacterStyleName } from "@/store/utility";
+import { createLogger } from "@/helpers/log";
 
+const { warn, error } = createLogger("CharacterPortrait");
 const store = useStore();
 
 const characterInfo = computed(() => {
@@ -89,10 +95,123 @@ const isInitializingSpeaker = computed(() => {
 });
 
 const isMultipleEngine = computed(() => store.state.engineIds.length > 1);
+
+const { mounted } = useMounted();
+
+const canvasContainer = ref<HTMLElement | null>(null);
+const canvas = ref<HTMLCanvasElement | null>(null);
+let resizeObserver: ResizeObserver | undefined;
+let canvasWidth: number | undefined;
+let canvasHeight: number | undefined;
+
+let renderer: PIXI.Renderer | undefined;
+let stage: PIXI.Container | undefined;
+let requestId: number | undefined;
+let renderInNextFrame = false;
+
+const render = () => {
+  console.log("render!");
+  if (renderer == undefined) {
+    throw new Error("renderer is undefined.");
+  }
+  if (stage == undefined) {
+    throw new Error("stage is undefined.");
+  }
+  if (canvasWidth == undefined) {
+    throw new Error("canvasWidth is undefined.");
+  }
+
+  renderer.render(stage);
+};
+
+watch(portraitPath, () => {
+  if (stage && portraitPath.value) {
+    console.log(portraitPath.value);
+    const texture = PIXI.Sprite.from(portraitPath.value);
+    stage.addChild(texture);
+    render();
+  }
+});
+
+onMounted(() => {
+  const canvasContainerElement = canvasContainer.value;
+  const canvasElement = canvas.value;
+  if (!canvasContainerElement) {
+    throw new Error("canvasContainerElement is null.");
+  }
+  if (!canvasElement) {
+    throw new Error("canvasElement is null.");
+  }
+
+  canvasWidth = canvasContainerElement.clientWidth;
+  canvasHeight = canvasContainerElement.clientHeight;
+
+  renderer = new PIXI.Renderer({
+    view: canvasElement,
+    backgroundAlpha: 0,
+    antialias: true,
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true,
+    width: canvasWidth,
+    height: canvasHeight,
+  });
+  stage = new PIXI.Container();
+
+
+  // webGLVersionをチェックする
+  // 2未満の場合、ピッチの表示ができないのでエラーとしてロギングする
+  const webGLVersion = renderer.context.webGLVersion;
+  if (webGLVersion < 2) {
+    error(`webGLVersion is less than 2. webGLVersion: ${webGLVersion}`);
+  }
+
+  const callback = () => {
+    if (renderInNextFrame) {
+      render();
+      renderInNextFrame = false;
+    }
+    requestId = window.requestAnimationFrame(callback);
+  };
+  requestId = window.requestAnimationFrame(callback);
+
+  resizeObserver = new ResizeObserver(() => {
+    if (renderer == undefined) {
+      throw new Error("renderer is undefined.");
+    }
+    const canvasContainerWidth = canvasContainerElement.clientWidth;
+    const canvasContainerHeight = canvasContainerElement.clientHeight;
+
+    if (canvasContainerWidth > 0 && canvasContainerHeight > 0) {
+      canvasWidth = canvasContainerWidth;
+      canvasHeight = canvasContainerHeight;
+      renderer.resize(canvasWidth, canvasHeight);
+      renderInNextFrame = true;
+    }
+  });
+  resizeObserver.observe(canvasContainerElement);
+});
+
+onUnmounted(() => {
+  if (requestId != undefined) {
+    window.cancelAnimationFrame(requestId);
+  }
+  stage?.destroy();
+  renderer?.destroy(true);
+  resizeObserver?.disconnect();
+});
 </script>
 
 <style scoped lang="scss">
 @use "@/styles/colors" as colors;
+@use "@/styles/v2/variables" as vars;
+.canvas-container {
+  overflow: hidden;
+  z-index: vars.$z-index-character-portrait;
+  pointer-events: none;
+  position: relative;
+
+  contain: strict; // canvasのサイズが変わるのを無視する
+}
 
 .character-name {
   position: absolute;
